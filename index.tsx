@@ -9,6 +9,7 @@
  */
 
 import { addContextMenuPatch, NavContextMenuPatchCallback, removeContextMenuPatch } from "@api/ContextMenu"
+import { Notifications } from "@api/index"
 import { definePluginSettings } from "@api/Settings"
 import { getCurrentChannel, openUserProfile } from "@utils/discord"
 import { openModal } from "@utils/modal"
@@ -183,9 +184,8 @@ function jumpTo(guildId?: string, channelId?: string, msgId?: string) {
     })
 }
 
-// sends a real OS-level notification (Windows notification center, macOS banner, etc.)
-// new Notification() in Electron's renderer process goes through the OS, unlike
-// Notifications.showNotification() which is just discord's in-app toast popup
+// in-app toast when discord is focused, OS notification when it's minimized/in background
+// document.hasFocus() is the simplest reliable way to check this in electron
 function push(opts: {
     title: string
     body: string
@@ -195,24 +195,37 @@ function push(opts: {
     if (inQuietHours(settings)) return
     if (settings.store.debugLog) log.info(`notif: ${opts.title} — ${opts.body}`)
 
-    try {
-        const n = new window.Notification(opts.title, {
+    if (document.hasFocus()) {
+        // discord is open and in focus — use the in-app toast
+        Notifications.showNotification({
+            title: opts.title,
             body: opts.body,
             icon: opts.icon,
-            // silent: false is default but being explicit
-            silent: false,
+            onClick: opts.onClick,
         })
-        if (opts.onClick) {
-            n.onclick = () => {
-                // bring the discord window to focus first
-                window.focus()
-                opts.onClick!()
+    } else {
+        // discord is minimized or in background — use real OS notification
+        try {
+            const n = new window.Notification(opts.title, {
+                body: opts.body,
+                icon: opts.icon,
+            })
+            if (opts.onClick) {
+                n.onclick = () => {
+                    window.focus()
+                    opts.onClick!()
+                }
             }
+        } catch (e) {
+            // OS blocked it for some reason, fall back to in-app toast
+            log.warn("OS Notification() failed, falling back to toast:", e)
+            Notifications.showNotification({
+                title: opts.title,
+                body: opts.body,
+                icon: opts.icon,
+                onClick: opts.onClick,
+            })
         }
-    } catch (e) {
-        // fallback: Notification API might be blocked by OS permission
-        // shouldn't happen in electron but just in case
-        log.warn("Notification() failed:", e)
     }
 }
 

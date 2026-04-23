@@ -1,7 +1,7 @@
 // WatchlistModal.tsx
 
 import { React } from "@webpack/common"
-import { Button, Text, TextInput } from "@webpack/common"
+import { Button, TextInput } from "@webpack/common"
 import { UserStore, RestAPI } from "@webpack/common"
 import { ModalRoot, ModalHeader, ModalContent, ModalSize } from "@utils/modal"
 
@@ -12,55 +12,27 @@ import {
     displayName, featureOn
 } from "./store"
 
-// only animations and structural layout — zero color rules
-// colors are all inline so the UA stylesheet can never win
-const STYLE_ID = "ur-s4"
+// only animations — no color rules at all
+const STYLE_ID = "ur-s5"
 function injectStyles() {
     if (document.getElementById(STYLE_ID)) return
     const el = document.createElement("style")
     el.id = STYLE_ID
     el.textContent = `
-        @keyframes ur-in   { from { opacity: 0; transform: translateY(4px) } to { opacity: 1; transform: none } }
-        @keyframes ur-spin { to { transform: rotate(360deg) } }
-
+        @keyframes ur-in   { from{opacity:0;transform:translateY(4px)} to{opacity:1;transform:none} }
+        @keyframes ur-spin { to{transform:rotate(360deg)} }
         .ur-card {
-            border-radius: 10px;
-            border: 1px solid var(--background-modifier-accent);
-            background: var(--background-secondary);
-            margin-bottom: 8px;
-            overflow: hidden;
-            transition: border-color 0.15s, box-shadow 0.15s;
-            animation: ur-in 0.15s ease;
+            border-radius:10px; overflow:hidden; margin-bottom:8px;
+            border:1px solid var(--background-modifier-accent);
+            background:var(--background-secondary);
+            transition:border-color .15s,box-shadow .15s;
+            animation:ur-in .15s ease;
         }
-        .ur-card:hover {
-            border-color: rgba(88, 101, 242, 0.45);
-            box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
-        }
-        .ur-toggle {
-            position: relative;
-            width: 32px; height: 18px;
-            border-radius: 9px;
-            flex-shrink: 0;
-            cursor: pointer;
-            transition: background 0.15s;
-        }
-        .ur-knob {
-            position: absolute;
-            top: 2px;
-            width: 14px; height: 14px;
-            border-radius: 50%;
-            background: #fff;
-            box-shadow: 0 1px 3px rgba(0,0,0,0.3);
-            transition: left 0.15s;
-        }
+        .ur-card:hover { border-color:rgba(88,101,242,.4); box-shadow:0 2px 12px rgba(0,0,0,.15); }
         .ur-spinner {
-            display: inline-block;
-            width: 12px; height: 12px;
-            border-radius: 50%;
-            border: 2px solid rgba(255,255,255,0.3);
-            border-top-color: #fff;
-            animation: ur-spin 0.6s linear infinite;
-            vertical-align: middle;
+            display:inline-block; width:12px; height:12px; border-radius:50%;
+            border:2px solid rgba(255,255,255,.3); border-top-color:#fff;
+            animation:ur-spin .6s linear infinite; vertical-align:middle;
         }
     `
     document.head.appendChild(el)
@@ -86,117 +58,172 @@ function toHex(n?: number | null) {
     return "#" + n.toString(16).padStart(6, "0")
 }
 
-// --- toggle ---
-// has to be custom since discord's Switch component isn't cleanly exported
-// inline background so no class-color issues
+// --- reusable clickable div (no UA stylesheet issues unlike <button>) ---
+// role="button" + tabIndex for accessibility
 
-function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+function Clickable({
+    onClick,
+    style,
+    title,
+    children,
+}: {
+    onClick: () => void
+    style?: React.CSSProperties
+    title?: string
+    children: React.ReactNode
+}) {
     return (
         <div
-            className="ur-toggle"
-            style={{ background: on ? "var(--brand-500)" : "var(--background-modifier-accent)" }}
-            onClick={e => { e.stopPropagation(); onChange(!on) }}
+            role="button"
+            tabIndex={0}
+            title={title}
+            onClick={onClick}
+            onKeyDown={e => { if (e.key === "Enter" || e.key === " ") onClick() }}
+            style={{ cursor: "pointer", userSelect: "none", ...style }}
         >
-            <div className="ur-knob" style={{ left: on ? 16 : 2 }} />
+            {children}
         </div>
     )
 }
 
-// --- icon button ---
-// "all: unset" nukes every browser/UA default before we set anything
-// this is the only reliable way to stop buttons from having black text
+// --- toggle ---
 
-function IconBtn({
-    onClick, title, danger = false, children
-}: {
+function Toggle({ on, onChange }: { on: boolean; onChange: (v: boolean) => void }) {
+    return (
+        <Clickable
+            onClick={() => onChange(!on)}
+            style={{
+                position: "relative",
+                width: 32, height: 18,
+                borderRadius: 9,
+                background: on ? "var(--brand-500)" : "var(--background-modifier-accent)",
+                flexShrink: 0,
+                transition: "background .15s",
+            }}
+        >
+            <div style={{
+                position: "absolute", top: 2,
+                left: on ? 16 : 2,
+                width: 14, height: 14, borderRadius: "50%",
+                background: "#fff",
+                boxShadow: "0 1px 3px rgba(0,0,0,.3)",
+                transition: "left .15s",
+            }} />
+        </Clickable>
+    )
+}
+
+// --- tab pill ---
+
+function Tab({ active, onClick, children }: {
+    active: boolean
+    onClick: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <Clickable
+            onClick={onClick}
+            style={{
+                flex: 1,
+                textAlign: "center",
+                padding: "7px 0",
+                borderRadius: 8,
+                fontSize: 13,
+                fontWeight: active ? 600 : 500,
+                color: active ? "var(--header-primary)" : "var(--text-muted)",
+                background: active ? "var(--background-primary)" : "transparent",
+                boxShadow: active ? "0 1px 4px rgba(0,0,0,.2)" : "none",
+                transition: "background .12s, color .12s",
+            }}
+        >
+            {children}
+        </Clickable>
+    )
+}
+
+// --- icon action button (div, not button) ---
+
+function IconAction({ onClick, title, danger, children }: {
     onClick: () => void
     title?: string
     danger?: boolean
     children: React.ReactNode
 }) {
-    const [hovered, setHovered] = React.useState(false)
-
-    const color = danger && hovered
-        ? "var(--status-danger)"
-        : hovered
-            ? "var(--interactive-hover)"
-            : "var(--interactive-normal)"
-
-    const bg = danger && hovered
-        ? "rgba(237,66,69,0.1)"
-        : hovered
-            ? "var(--background-modifier-hover)"
-            : "transparent"
-
+    const [hov, setHov] = React.useState(false)
     return (
-        <button
-            title={title}
+        <Clickable
             onClick={onClick}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
+            title={title}
             style={{
-                all: "unset",
-                cursor: "pointer",
-                color,
-                background: bg,
+                padding: "5px 7px",
                 borderRadius: 6,
-                padding: "5px 8px",
                 fontSize: 15,
                 lineHeight: 1,
                 display: "inline-flex",
                 alignItems: "center",
                 justifyContent: "center",
-                transition: "background 0.12s, color 0.12s",
-                boxSizing: "border-box",
-            } as React.CSSProperties}
+                color: danger && hov
+                    ? "var(--status-danger)"
+                    : hov
+                        ? "var(--interactive-hover)"
+                        : "var(--interactive-normal)",
+                background: danger && hov
+                    ? "rgba(237,66,69,.1)"
+                    : hov
+                        ? "var(--background-modifier-hover)"
+                        : "transparent",
+                transition: "background .12s, color .12s",
+            }}
         >
-            {children}
-        </button>
+            <div
+                onMouseEnter={() => setHov(true)}
+                onMouseLeave={() => setHov(false)}
+                style={{ display: "contents" }}
+            >
+                {children}
+            </div>
+        </Clickable>
     )
 }
 
-// --- tab button ---
+// override chip — also a div
 
-function TabBtn({
-    active, onClick, children
-}: {
-    active: boolean
+function Chip({ on, overridden, icon, label, onClick, onRightClick }: {
+    on: boolean
+    overridden: boolean
+    icon: string
+    label: string
     onClick: () => void
-    children: React.ReactNode
+    onRightClick: () => void
 }) {
-    const [hovered, setHovered] = React.useState(false)
-
     return (
-        <button
+        <Clickable
             onClick={onClick}
-            onMouseEnter={() => setHovered(true)}
-            onMouseLeave={() => setHovered(false)}
             style={{
-                all: "unset",
-                flex: 1,
-                textAlign: "center",
-                padding: "7px 0",
-                borderRadius: 8,
-                cursor: "pointer",
-                fontSize: 13,
-                fontWeight: active ? 600 : 500,
-                color: active
-                    ? "var(--header-primary)"
-                    : hovered
-                        ? "var(--text-normal)"
-                        : "var(--text-muted)",
-                background: active
-                    ? "var(--background-primary)"
-                    : hovered
-                        ? "var(--background-modifier-hover)"
-                        : "transparent",
-                boxShadow: active ? "0 1px 4px rgba(0,0,0,0.2)" : "none",
-                transition: "background 0.12s, color 0.12s",
-                boxSizing: "border-box",
-            } as React.CSSProperties}
+                display: "flex", alignItems: "center", gap: 7,
+                padding: "8px 10px", borderRadius: 8,
+                border: `1.5px solid ${on ? "rgba(88,101,242,.45)" : "var(--background-modifier-accent)"}`,
+                background: on ? "rgba(88,101,242,.1)" : "var(--background-tertiary)",
+                opacity: on ? 1 : 0.6,
+                transition: "all .12s",
+            }}
+            title={overridden ? "Overriding global — right-click to reset" : "Click to override global setting"}
         >
-            {children}
-        </button>
+            {/* need a real div for onContextMenu since Clickable doesn't expose it */}
+            <div
+                style={{ display: "contents" }}
+                onContextMenu={e => { e.preventDefault(); onRightClick() }}
+            >
+                <span style={{ fontSize: 13 }}>{icon}</span>
+                <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: on ? "var(--text-normal)" : "var(--text-muted)" }}>
+                    {label}
+                </span>
+                {overridden && (
+                    <span style={{ fontSize: 7, color: "var(--brand-400)", marginRight: 2 }}>●</span>
+                )}
+                <Toggle on={on} onChange={() => onClick()} />
+            </div>
+        </Clickable>
     )
 }
 
@@ -244,8 +271,8 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
                 msg: s === 404
                     ? "User not found — double-check the ID."
                     : s === 403
-                    ? "Profile is private (no shared server). You can still add by ID."
-                    : `Request failed${s ? ` (${s})` : ""} — try again.`,
+                        ? "Profile is private (no shared server). You can still add by ID."
+                        : `Request failed${s ? ` (${s})` : ""} — try again.`,
             })
         }
     }
@@ -257,37 +284,29 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
         onAdded()
     }
 
-    // step 2: preview + confirm
+    // --- step 2: preview ---
     if (lk.stage === "found") return (
-        <div style={{ animation: "ur-in 0.18s ease" }}>
+        <div style={{ animation: "ur-in .18s ease" }}>
             <div style={{
                 borderRadius: 10, overflow: "hidden", marginBottom: 16,
                 border: "1px solid var(--background-modifier-accent)",
-                boxShadow: "0 4px 20px rgba(0,0,0,0.2)",
+                boxShadow: "0 4px 20px rgba(0,0,0,.2)",
             }}>
-                {/* banner / color strip */}
                 <div style={{
-                    height: lk.banner ? 96 : 60,
-                    position: "relative",
+                    height: lk.banner ? 96 : 60, position: "relative",
                     background: lk.banner
                         ? `url(${lk.banner}) center/cover no-repeat`
                         : lk.accent
-                            ? `linear-gradient(135deg, ${lk.accent}bb, ${lk.accent}44)`
-                            : "linear-gradient(135deg, #5865f2, #4752c4)",
+                            ? `linear-gradient(135deg,${lk.accent}bb,${lk.accent}44)`
+                            : "linear-gradient(135deg,#5865f2,#4752c4)",
                 }}>
-                    <img
-                        src={lk.av}
-                        style={{
-                            position: "absolute", bottom: -22, left: 16,
-                            width: 56, height: 56, borderRadius: "50%",
-                            border: "4px solid var(--modal-background, var(--background-primary))",
-                            objectFit: "cover",
-                            boxShadow: "0 2px 10px rgba(0,0,0,0.3)",
-                        }}
-                        onError={(e: any) => e.target.style.display = "none"}
-                    />
+                    <img src={lk.av} style={{
+                        position: "absolute", bottom: -22, left: 16,
+                        width: 56, height: 56, borderRadius: "50%",
+                        border: "4px solid var(--modal-background,var(--background-primary))",
+                        objectFit: "cover", boxShadow: "0 2px 10px rgba(0,0,0,.3)",
+                    }} onError={(e: any) => e.target.style.display = "none"} />
                 </div>
-
                 <div style={{ padding: "28px 16px 16px", background: "var(--background-secondary)" }}>
                     <div style={{ fontSize: 17, fontWeight: 700, color: "var(--header-primary)" }}>
                         {lk.user.globalName || lk.user.username}
@@ -300,7 +319,7 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
                     {lk.user.bio && (
                         <div style={{
                             fontSize: 13, color: "var(--text-normal)", marginTop: 8,
-                            lineHeight: 1.4, opacity: 0.85,
+                            lineHeight: 1.4, opacity: .85,
                             display: "-webkit-box", WebkitLineClamp: 2,
                             WebkitBoxOrient: "vertical", overflow: "hidden",
                         }}>
@@ -310,8 +329,11 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
                 </div>
             </div>
 
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--header-secondary)", marginBottom: 6 }}>
-                Label <span style={{ fontWeight: 400, textTransform: "none", opacity: 0.5 }}>— optional</span>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--header-secondary)", marginBottom: 6 }}>
+                Label&nbsp;
+                <span style={{ fontWeight: 400, textTransform: "none", color: "var(--text-muted)", fontSize: 11 }}>
+                    — optional
+                </span>
             </div>
             <TextInput
                 value={label}
@@ -323,7 +345,6 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 5, marginBottom: 16 }}>
                 Only visible in your notifications — completely invisible to them
             </div>
-
             <div style={{ display: "flex", gap: 8 }}>
                 <Button onClick={doAdd} size={Button.Sizes.MEDIUM} style={{ flex: 1 }}>
                     Add to Watchlist
@@ -339,10 +360,10 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
         </div>
     )
 
-    // step 1: ID input
+    // --- step 1: ID input ---
     return (
         <div>
-            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: "0.07em", color: "var(--header-secondary)", marginBottom: 6 }}>
+            <div style={{ fontSize: 11, fontWeight: 700, textTransform: "uppercase", letterSpacing: ".06em", color: "var(--header-secondary)", marginBottom: 6 }}>
                 User ID
             </div>
             <div style={{ display: "flex", gap: 8 }}>
@@ -369,18 +390,16 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
                         : "Look Up"}
                 </Button>
             </div>
-
             <div style={{ fontSize: 12, color: "var(--text-muted)", marginTop: 8 }}>
                 Enable <strong style={{ color: "var(--text-normal)" }}>Developer Mode</strong> in Discord settings → right-click any user → Copy User ID
             </div>
-
             {lk.stage === "error" && (
                 <div style={{
                     display: "flex", gap: 9, alignItems: "flex-start",
                     marginTop: 12, padding: "10px 13px", borderRadius: 8,
-                    background: "rgba(237,66,69,0.08)",
-                    border: "1px solid rgba(237,66,69,0.3)",
-                    animation: "ur-in 0.14s ease",
+                    background: "rgba(237,66,69,.08)",
+                    border: "1px solid rgba(237,66,69,.3)",
+                    animation: "ur-in .14s ease",
                 }}>
                     <span style={{ fontSize: 15, flexShrink: 0 }}>⚠️</span>
                     <span style={{ fontSize: 13, color: "var(--status-danger)" }}>{lk.msg}</span>
@@ -390,7 +409,7 @@ function AddTab({ settings, onAdded }: { settings: any; onAdded: () => void }) {
     )
 }
 
-// --- override chips ---
+// --- override items list ---
 
 const OVERRIDE_ITEMS: { label: string; icon: string; key: keyof WatchedUser["overrides"]; gk: string }[] = [
     { label: "Messages", icon: "💬", key: "msgs",    gk: "globalMsgs"    },
@@ -418,11 +437,7 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
     const av   = du ? du.getAvatarURL(undefined, 64, false) : avatarUrl(user.id, null)
     const name = displayName(du) || user.id
 
-    const saveNick = () => {
-        patchUser(settings, user.id, { nick })
-        setEditNick(false)
-        onUpdate()
-    }
+    const saveNick = () => { patchUser(settings, user.id, { nick }); setEditNick(false); onUpdate() }
 
     const setOv = (key: keyof WatchedUser["overrides"], val: boolean | null) => {
         patchUser(settings, user.id, { overrides: { ...user.overrides, [key]: val } })
@@ -435,7 +450,6 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
         <div className="ur-card">
             {/* main row */}
             <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "12px 14px" }}>
-                {/* avatar */}
                 <div style={{ position: "relative", flexShrink: 0 }}>
                     <img
                         src={av}
@@ -448,11 +462,10 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
                             width: 10, height: 10, borderRadius: "50%",
                             background: "var(--brand-500)",
                             border: "2px solid var(--background-secondary)",
-                        }} title="Has per-user overrides" />
+                        }} />
                     )}
                 </div>
 
-                {/* name + id */}
                 <div style={{ flex: 1, minWidth: 0 }}>
                     <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
                         <span style={{ fontWeight: 600, fontSize: 14, color: "var(--header-primary)" }}>
@@ -460,9 +473,8 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
                         </span>
                         {user.nick && (
                             <span style={{
-                                fontSize: 11, fontWeight: 600, padding: "1px 8px",
-                                borderRadius: 20, background: "rgba(88,101,242,0.18)",
-                                color: "var(--brand-400)",
+                                fontSize: 11, fontWeight: 600, padding: "1px 8px", borderRadius: 20,
+                                background: "rgba(88,101,242,.18)", color: "var(--brand-400)",
                             }}>
                                 {user.nick}
                             </span>
@@ -473,13 +485,14 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
                     </div>
                 </div>
 
-                {/* action buttons */}
                 <div style={{ display: "flex", gap: 2, flexShrink: 0 }}>
-                    <IconBtn onClick={() => setEditNick(v => !v)} title="Edit label">✏️</IconBtn>
-                    <IconBtn onClick={() => setExpanded(v => !v)} title="Per-user overrides">
-                        {expanded ? "▲" : "▼"}
-                    </IconBtn>
-                    <IconBtn onClick={onRemove} title="Stop watching" danger>🗑</IconBtn>
+                    <IconAction onClick={() => setEditNick(v => !v)} title="Edit label">✏️</IconAction>
+                    <IconAction onClick={() => setExpanded(v => !v)} title="Per-user overrides">
+                        <span style={{ color: "var(--interactive-normal)", fontSize: 11 }}>
+                            {expanded ? "▲" : "▼"}
+                        </span>
+                    </IconAction>
+                    <IconAction onClick={onRemove} title="Stop watching" danger>🗑</IconAction>
                 </div>
             </div>
 
@@ -488,7 +501,7 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
                 <div style={{
                     display: "flex", gap: 8, padding: "10px 14px 12px",
                     borderTop: "1px solid var(--background-modifier-accent)",
-                    animation: "ur-in 0.14s ease",
+                    animation: "ur-in .14s ease",
                 }}>
                     <div style={{ flex: 1 }}>
                         <TextInput
@@ -509,49 +522,30 @@ function UserCard({ user, settings, onUpdate, onRemove }: {
                 </div>
             )}
 
-            {/* overrides panel */}
+            {/* overrides */}
             {expanded && (
                 <div style={{ borderTop: "1px solid var(--background-modifier-accent)" }}>
                     <div style={{ fontSize: 12, color: "var(--text-muted)", margin: "8px 14px 6px" }}>
-                        Click to override global setting for this person. Right-click to reset.
+                        Click to override global setting per-person. Right-click a chip to reset it.
                     </div>
-                    <div style={{
-                        display: "grid", gridTemplateColumns: "1fr 1fr",
-                        gap: 4, padding: "0 12px 10px",
-                    }}>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 4, padding: "0 12px 10px" }}>
                         {OVERRIDE_ITEMS.map(item => {
                             const isOn = featureOn(settings, user.id, item.key, item.gk)
                             const isOv = user.overrides[item.key] !== null
-
                             return (
-                                <div
+                                <Chip
                                     key={item.key}
-                                    title={isOv ? "Overriding global — right-click to reset" : "Using global setting"}
+                                    on={isOn}
+                                    overridden={isOv}
+                                    icon={item.icon}
+                                    label={item.label}
                                     onClick={() => {
                                         if (!isOv) setOv(item.key, !isOn)
                                         else if (user.overrides[item.key] === true) setOv(item.key, false)
                                         else setOv(item.key, null)
                                     }}
-                                    onContextMenu={e => { e.preventDefault(); setOv(item.key, null) }}
-                                    style={{
-                                        display: "flex", alignItems: "center", gap: 7,
-                                        padding: "8px 10px", borderRadius: 8, cursor: "pointer",
-                                        border: `1.5px solid ${isOn ? "rgba(88,101,242,0.45)" : "var(--background-modifier-accent)"}`,
-                                        background: isOn ? "rgba(88,101,242,0.1)" : "var(--background-tertiary)",
-                                        opacity: isOn ? 1 : 0.6,
-                                        userSelect: "none",
-                                        transition: "all 0.12s",
-                                    }}
-                                >
-                                    <span style={{ fontSize: 13 }}>{item.icon}</span>
-                                    <span style={{ flex: 1, fontSize: 12, fontWeight: 500, color: isOn ? "var(--text-normal)" : "var(--text-muted)" }}>
-                                        {item.label}
-                                    </span>
-                                    {isOv && (
-                                        <span style={{ fontSize: 7, color: "var(--brand-400)", marginRight: 2 }}>●</span>
-                                    )}
-                                    <Toggle on={isOn} onChange={v => setOv(item.key, isOv ? v : null)} />
-                                </div>
+                                    onRightClick={() => setOv(item.key, null)}
+                                />
                             )
                         })}
                     </div>
@@ -594,7 +588,7 @@ function WatchlistTab({ settings, onUpdate }: { settings: any; onUpdate: () => v
 
     if (users.length === 0) return (
         <div style={{ textAlign: "center", padding: "44px 20px" }}>
-            <div style={{ fontSize: 44, marginBottom: 12, opacity: 0.6 }}>👁</div>
+            <div style={{ fontSize: 44, marginBottom: 12, opacity: .6 }}>👁</div>
             <div style={{ fontSize: 16, fontWeight: 600, color: "var(--header-primary)", marginBottom: 6 }}>
                 Nobody on the watchlist
             </div>
@@ -615,12 +609,9 @@ function WatchlistTab({ settings, onUpdate }: { settings: any; onUpdate: () => v
                     />
                 </div>
             )}
-            {shown.length === 0 ? (
-                <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "var(--text-muted)" }}>
-                    No results for "{search}"
-                </div>
-            ) : (
-                shown.map(u => (
+            {shown.length === 0
+                ? <div style={{ textAlign: "center", padding: "24px 0", fontSize: 13, color: "var(--text-muted)" }}>No results for "{search}"</div>
+                : shown.map(u => (
                     <UserCard
                         key={u.id}
                         user={u}
@@ -629,7 +620,7 @@ function WatchlistTab({ settings, onUpdate }: { settings: any; onUpdate: () => v
                         onRemove={() => { removeUser(settings, u.id); refresh() }}
                     />
                 ))
-            )}
+            }
         </>
     )
 }
@@ -656,7 +647,7 @@ export function WatchlistModal({ modalProps, settings }: { modalProps: any; sett
                         <span style={{
                             background: "var(--brand-500)", color: "#fff",
                             borderRadius: 10, fontSize: 11, fontWeight: 700,
-                            padding: "1px 7px", minWidth: 20, textAlign: "center",
+                            padding: "1px 7px",
                         }}>
                             {count}
                         </span>
@@ -665,29 +656,22 @@ export function WatchlistModal({ modalProps, settings }: { modalProps: any; sett
             </ModalHeader>
 
             <ModalContent style={{ padding: "4px 16px 24px" }}>
-                {/* tabs */}
+                {/* tabs — divs, not buttons */}
                 <div style={{
                     display: "flex", gap: 2, padding: 3,
                     background: "var(--background-secondary)",
                     borderRadius: 10, marginBottom: 16,
                 }}>
-                    <TabBtn active={tab === "list"} onClick={() => setTab("list")}>
+                    <Tab active={tab === "list"} onClick={() => setTab("list")}>
                         Watchlist{count > 0 ? ` (${count})` : ""}
-                    </TabBtn>
-                    <TabBtn active={tab === "add"} onClick={() => setTab("add")}>
+                    </Tab>
+                    <Tab active={tab === "add"} onClick={() => setTab("add")}>
                         + Add User
-                    </TabBtn>
+                    </Tab>
                 </div>
 
-                {tab === "list" && (
-                    <WatchlistTab settings={settings} onUpdate={refreshCount} />
-                )}
-                {tab === "add" && (
-                    <AddTab
-                        settings={settings}
-                        onAdded={() => { refreshCount(); setTab("list") }}
-                    />
-                )}
+                {tab === "list" && <WatchlistTab settings={settings} onUpdate={refreshCount} />}
+                {tab === "add"  && <AddTab settings={settings} onAdded={() => { refreshCount(); setTab("list") }} />}
             </ModalContent>
         </ModalRoot>
     )

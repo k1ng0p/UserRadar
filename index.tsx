@@ -547,8 +547,8 @@ export default definePlugin({
                 const label = getWatchedUser(settings, id)?.nick
 
                 push({
-                    title: `${label ? `${label} (${name})` : name} is now ${STATUS_EMOJI[update.status] ?? ""} ${update.status}`,
-                    body: `Was ${STATUS_EMOJI[prev] ?? ""} ${prev}`,
+                    title: `${label ? `${label} (${name})` : name} is now ${update.status} ${STATUS_EMOJI[update.status] ?? ""}`,
+                    body: `Was: ${prev} ${STATUS_EMOJI[prev] ?? ""}`,
                     icon: u?.getAvatarURL(undefined, undefined, false),
                     onClick: () => openUserProfile(id),
                 })

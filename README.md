@@ -16,7 +16,7 @@ Made by **Mubashir**
 ### 🔔 Real OS Notifications
 Uses the native `Notification` API so alerts actually show up in your Windows notification center / macOS notification banner even when Discord is minimized or in the background. Clicking a notification focuses Discord and jumps straight to the relevant message or channel.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496942775877505024/image.png?ex=69ebb819&is=69ea6699&hm=9c3f7226b6984ca0d555a495780038d457e10457101fdb3ba2cdfbe3dbce5248&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496942775877505024/image.png?ex=69f4f299&is=69f3a119&hm=7e3ff9ecf03fdd19464546f6ef213e8ed7436e6f8abf1c97b384468a4133d0aa&)
 
 ### 📋 What Gets Tracked
 
@@ -34,22 +34,22 @@ Uses the native `Notification` API so alerts actually show up in your Windows no
 ### 🏷 Per-User Labels
 Assign a private nickname to anyone on your watchlist — "my ex", "coworker jake", whatever. Shows up in every notification instead of their Discord name. Completely invisible to them.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496942400264999072/image.png?ex=69ebb7c0&is=69ea6640&hm=284c8cd877d8a9e1f91c26d96c67558e1456cb02e2395a0c44dbd2b339a9f9ac&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496942400264999072/image.png?ex=69f4f240&is=69f3a0c0&hm=f458518b230e20f197d5e367bebcb29d5136a97c7e9c4129cf7d54a8cc6026c2&)
 
 ### ⚙️ Per-User Overrides
 Expand any user in the watchlist manager and toggle individual event types just for that person. For example: get typing notifications from one specific person globally off, but still on for one specific person. Overrides are marked with a small dot on their avatar so you know who has custom settings.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496941459754975302/image.png?ex=69ebb6df&is=69ea655f&hm=354fbb2e145d0b5e98dcbd721a1ae0e0dad0d4996f339b9ff774411dd876f179&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496941459754975302/image.png?ex=69f4f15f&is=69f39fdf&hm=2a98dc8ff142e0c09a7f7015de94b5af9a0b8f3940442d4c526147cd15fcb5e3&)
 
 ### 🔍 ID-Based User Lookup
 Add users by pasting their Discord ID — no right-clicking required. The plugin fetches their profile and shows a preview card (avatar, display name, bio, banner) so you can confirm it's the right person before adding.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496944566157316346/image.png?ex=69ebb9c4&is=69ea6844&hm=c233c2c47c074afb5f4b07d5fef49e5c640ad1e2fe8e817c5a7ac9f4273b78e7&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496944566157316346/image.png?ex=69f4f444&is=69f3a2c4&hm=713ec488bc9e11b981ac9c50e0ffa604a5534053b3bfc0cc1eea4d2366a50376&)
 
 ### 🌙 Quiet Hours
 Set a time window where all notifications are suppressed. Supports overnight ranges (e.g. 23:00 to 07:00). Nothing fires during that window, even if events happen.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496944047510786289/image.png?ex=69ebb948&is=69ea67c8&hm=4a05e03fa7e4b2bf4de6de2dfa1f7434c1b7b16c79fc9bbddeb306e4c0c45197&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496944047510786289/image.png?ex=69f4f3c8&is=69f3a248&hm=438d9c53ce96cf11d815dab6e773a8fe165b0eac1899edbf4fd4fc8482875bf0&)
 
 ### 🔄 Background Profile Polling
 Discord doesn't push bio/banner/accent color changes over WebSocket, so the plugin polls every watched user's profile every 5 minutes to catch those. Username and avatar changes are detected instantly via `USER_UPDATE`.
@@ -93,9 +93,9 @@ pnpm build
 **From the plugin settings:**
 Settings → Vencord → Plugins → UserRadar (gear icon) → Open Watchlist Manager → switch to "Add User" tab → paste a Discord user ID → Look Up → confirm
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496627052726587513/image.png?ex=69eb3acf&is=69e9e94f&hm=e29344889c84ee9876c59c05b8c2fe8f9826541961c859629af8b4e2bfbfe1d4&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496627052726587513/image.png?ex=69f51e0f&is=69f3cc8f&hm=8dd6f2659e1843fd0f61395bd865b1d5a2dc56f1dc9a054c2bf7fe7300d2b15f&)
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496625594518208562/image.png?ex=69eb3973&is=69e9e7f3&hm=fa88cbfdfe8c0c3ba4adca0a43b56aa75a07a430969c0a9f05f42b5d75ee159b&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496625594518208562/image.png?ex=69f51cb3&is=69f3cb33&hm=806443bc4b0cbf647216c2295436525e5bc8aa5723d0a58536f414fe129c45fe&)
 
 **To find someone's Discord ID:**
 Enable Developer Mode in Discord (Settings → Advanced → Developer Mode), then right-click any user and hit **Copy User ID**
@@ -130,7 +130,7 @@ Install it the same way as UserRadar (drop into `userplugins`, rebuild).
 | Skip current channel | ✅ On | No notification if you're already in the same channel |
 | Debug log | ❌ Off | Log all tracked events to the browser console |
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496626655332925440/image.png?ex=69eb3a70&is=69e9e8f0&hm=e38e3f877c508d747879443d953ddee907bed60072563ab777469ff7cd50879f&)
+![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496626655332925440/image.png?ex=69f51db0&is=69f3cc30&hm=31b4de73deef76aa78ef5f1e454886f4076868bbb543f70ed63a32f55a5d1fd3&)
 
 ---
 
@@ -142,7 +142,7 @@ Install it the same way as UserRadar (drop into `userplugins`, rebuild).
 
 - **Status tracking** is off by default because it fires a lot — anyone who goes idle and back online every hour will spam you. Turn it on per-user via overrides if you only need it for specific people.
 
-![Screenshot](https://cdn.discordapp.com/attachments/1216786466835791934/1496947874485899484/image.png?ex=69ebbcd9&is=69ea6b59&hm=7521de090465f18e0122414757c4009864f33c5d14411044b53bc4a48441daf7&)
+![Screenshot](https://cdn.discordapp.com/attachments/1045751055595602023/1498311963430883491/bw6krq2.png?ex=69f4a7c1&is=69f35641&hm=2693dc9dcd59ef4e1abeef5c18dfffbd6c0696efbaa0e5c507a88a82d529cc19&)
 
 
 - **Quiet hours** support overnight ranges. Setting 23:00 → 07:00 correctly suppresses notifications across midnight.

@@ -1550,43 +1550,119 @@ function stopToolbarObserver() {
 function GlobalPresetControl({ refresh }: { refresh: () => void }) {
     const mode = settings.store.globalPresetMode || "custom"
     const presets = [
-        { key: "custom", label: "Custom", desc: "Per-user control", color: C.brand },
-        { key: "stalker", label: "Stalker", desc: "Everything tracked", color: C.danger },
-        { key: "lite", label: "Lite", desc: "Essential tracking only", color: C.brandLight },
-        { key: "silent", label: "Silent", desc: "All notifications off", color: C.muted },
+        { key: "custom",  label: "Custom",  desc: "Per-user control",         color: C.brand },
+        { key: "stalker", label: "Stalker", desc: "Everything tracked",       color: C.danger },
+        { key: "lite",    label: "Lite",    desc: "Essential tracking only",  color: C.brandLight },
+        { key: "silent",  label: "Silent",  desc: "All notifications off",    color: "#b5bac1" }, // lighter gray for better active contrast
     ]
     const activeIndex = presets.findIndex(p => p.key === mode)
 
     return (
-        <div style={{ marginBottom: 18 }}>
+        <div style={{ marginBottom: 20 }}>
             <div style={{ fontSize: 12, fontWeight: 800, textTransform: "uppercase", letterSpacing: 0.6, color: C.subheader, marginBottom: 10 }}>
                 Global Preset Mode
             </div>
-            <div style={{ position: "relative", display: "flex", background: C.bg1, borderRadius: 20, border: `1px solid ${C.border}`, padding: 4 }}>
+
+            <div style={{
+                display: "grid",
+                gridTemplateColumns: `repeat(${presets.length}, 1fr)`,
+                background: C.bg1,
+                borderRadius: 20,
+                border: `1px solid ${C.border}`,
+                padding: 4,
+                position: "relative",
+            }}>
+                {/* Sliding active pill */}
                 <div style={{
-                    position: "absolute", top: 4, bottom: 4, left: 4,
+                    position: "absolute",
+                    top: 4,
+                    bottom: 4,
+                    left: 4,
                     width: `calc((100% - 8px) / ${presets.length})`,
                     transform: `translateX(${activeIndex * 100}%)`,
                     background: presets[activeIndex].color + "20",
-                    border: `1px solid ${presets[activeIndex].color}50`,
+                    border: `1.5px solid ${presets[activeIndex].color}60`,
                     borderRadius: 16,
                     transition: "transform 300ms cubic-bezier(0.4, 0, 0.2, 1), background 200ms ease, border-color 200ms ease",
                     pointerEvents: "none",
+                    boxSizing: "border-box",
+                    zIndex: 1,
                 }} />
-                {presets.map(p => (
-                    <div
-                        key={p.key}
-                        onClick={() => { settings.store.globalPresetMode = p.key; refresh() }}
-                        style={{ flex: 1, padding: "10px 6px", borderRadius: 16, cursor: "pointer", textAlign: "center", position: "relative", zIndex: 2, transition: "color 200ms ease" }}
-                    >
-                        <div style={{ fontSize: 13, fontWeight: 700, color: mode === p.key ? p.color : C.muted, marginBottom: 3 }}>{p.label}</div>
-                        <div style={{ fontSize: 10, color: mode === p.key ? C.text : C.muted, opacity: mode === p.key ? 1 : 0.7, lineHeight: 1.2 }}>{p.desc}</div>
-                    </div>
-                ))}
+
+                {presets.map(p => {
+                    const isActive = mode === p.key
+                    return (
+                        <div
+                            key={p.key}
+                            onClick={() => { settings.store.globalPresetMode = p.key; refresh() }}
+                            style={{
+                                padding: "12px 6px",
+                                borderRadius: 16,
+                                cursor: "pointer",
+                                textAlign: "center",
+                                position: "relative",
+                                zIndex: 2,
+                                transition: "background 150ms ease",
+                                userSelect: "none",
+                            }}
+                            onMouseEnter={e => {
+                                if (!isActive) e.currentTarget.style.background = "rgba(255,255,255,0.04)"
+                            }}
+                            onMouseLeave={e => {
+                                e.currentTarget.style.background = "transparent"
+                            }}
+                        >
+                            <div style={{
+                                fontSize: 13,
+                                fontWeight: 700,
+                                color: isActive ? p.color : C.muted,
+                                marginBottom: 4,
+                                transition: "color 200ms ease",
+                                whiteSpace: "nowrap",
+                            }}>
+                                {p.label}
+                            </div>
+                            <div style={{
+                                fontSize: 10,
+                                color: isActive ? C.text : C.muted,
+                                opacity: isActive ? 1 : 0.6,
+                                lineHeight: 1.3,
+                                transition: "color 200ms ease, opacity 200ms ease",
+                                whiteSpace: "nowrap",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                padding: "0 2px",
+                            }}>
+                                {p.desc}
+                            </div>
+                        </div>
+                    )
+                })}
             </div>
+
             {mode !== "custom" && (
-                <div style={{ marginTop: 8, padding: "8px 12px", background: C.bg1, borderRadius: 12, border: `1px solid ${C.border}`, fontSize: 12, color: C.muted }}>
-                    All users follow the <b style={{ color: presets[activeIndex].color }}>{presets[activeIndex].label}</b> preset. Individual overrides are disabled. Switch to <b>Custom</b> to configure per-user.
+                <div style={{
+                    marginTop: 10,
+                    padding: "10px 14px",
+                    background: C.bg1,
+                    borderRadius: 14,
+                    border: `1px solid ${C.border}`,
+                    fontSize: 12,
+                    color: C.muted,
+                    display: "flex",
+                    alignItems: "center",
+                    gap: 8,
+                }}>
+                    <span style={{
+                        width: 6,
+                        height: 6,
+                        borderRadius: "50%",
+                        background: presets[activeIndex].color,
+                        flexShrink: 0,
+                    }} />
+                    <span>
+                        All users follow the <b style={{ color: presets[activeIndex].color }}>{presets[activeIndex].label}</b> preset. Individual overrides are disabled. Switch to <b style={{ color: C.brand, cursor: "pointer" }} onClick={() => { settings.store.globalPresetMode = "custom"; refresh() }}>Custom</b> to configure per-user.
+                    </span>
                 </div>
             )}
         </div>
@@ -1598,29 +1674,45 @@ function GlobalPresetControl({ refresh }: { refresh: () => void }) {
 const PLUGIN_RAW_URL     = "https://raw.githubusercontent.com/k1ng0p/UserRadar/main/index.tsx"
 const PLUGIN_COMMITS_URL = "https://api.github.com/repos/k1ng0p/UserRadar/commits?path=index.tsx&per_page=1"
 
-// bump this on every push — YYYY-MM-DD lexicographic compare works fine
-const PLUGIN_VERSION = "5.1"
+// this is the full sha of the commit this file was built from
+// the updater fetches the latest commit sha from github and compares against this
+// if they differ = update available, no date math, no version strings to forget to bump
+// UPDATE THIS after every install — copy the sha from github after pushing
+const INSTALLED_SHA = "none"
 
 type UpdateState = "idle" | "checking" | "uptodate" | "available" | "downloading" | "done" | "error"
 
-async function checkUpdate(): Promise<{ hasUpdate: boolean; sha: string; date: string }> {
+async function checkUpdate(): Promise<{ hasUpdate: boolean; sha: string; shortSha: string; date: string }> {
     const res = await fetch(PLUGIN_COMMITS_URL, {
         headers: { Accept: "application/vnd.github.v3+json" },
         cache: "no-store",
     })
-    if (!res.ok) throw new Error(`github ${res.status}`)
+    if (!res.ok) throw new Error(`github api error ${res.status}`)
     const data = await res.json()
-    if (!Array.isArray(data) || !data[0]) throw new Error("empty response")
-    const date = (data[0].commit?.committer?.date ?? "").slice(0, 10)
-    const sha  = (data[0].sha ?? "").slice(0, 7)
-    return { hasUpdate: date > PLUGIN_VERSION, sha, date }
+    if (!Array.isArray(data) || !data[0]) throw new Error("no commits found")
+    const latestSha  = data[0].sha as string
+    const shortSha   = latestSha.slice(0, 7)
+    const date       = (data[0].commit?.committer?.date ?? "").slice(0, 10)
+    // any sha mismatch = update available
+    // "none" always triggers so first-run users always see the update prompt
+    const hasUpdate  = latestSha !== INSTALLED_SHA && INSTALLED_SHA !== latestSha
+    return { hasUpdate, sha: latestSha, shortSha, date }
 }
 
 async function downloadAndInstall(): Promise<void> {
-    const res = await fetch(PLUGIN_RAW_URL + "?t=" + Date.now(), { cache: "no-store" })
-    if (!res.ok) throw new Error(`fetch ${res.status}`)
-    const code = await res.text()
+    // fetch latest sha + raw file in parallel
+    const [commitRes, fileRes] = await Promise.all([
+        fetch(PLUGIN_COMMITS_URL, { headers: { Accept: "application/vnd.github.v3+json" }, cache: "no-store" }),
+        fetch(PLUGIN_RAW_URL + "?t=" + Date.now(), { cache: "no-store" }),
+    ])
+    if (!commitRes.ok) throw new Error(`github ${commitRes.status}`)
+    if (!fileRes.ok)   throw new Error(`download ${fileRes.status}`)
+    const commitData = await commitRes.json()
+    const latestSha  = commitData[0]?.sha ?? "none"
+    let code = await fileRes.text()
     if (!code || code.length < 500) throw new Error("bad response")
+    // stamp the sha into the installed file so next check is accurate
+    code = code.replace(/const INSTALLED_SHA = ".*?"/, `const INSTALLED_SHA = "${latestSha}"`)
 
     // Vencord's native IPC — same thing the built-in updater uses internally
     // path is relative to the settings dir / userplugins folder
@@ -1682,7 +1774,7 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
         setUpdateErr("")
         checkUpdate().then(info => {
             if (info.hasUpdate) {
-                setUpdateInfo({ sha: info.sha, date: info.date })
+                setUpdateInfo({ sha: info.shortSha, date: info.date })
                 setUpdateState("available")
             } else {
                 setUpdateState("uptodate")
@@ -1953,7 +2045,7 @@ const msgCtxPatch: NavContextMenuPatchCallback = (children, { message }) => {
 export default definePlugin({
     name: "UserRadar",
     description: "track watched users and get notified on messages, edits, deletes, typing, profile/avatar changes, voice, status, activity, boosts, and server joins",
-    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
+    authors: [{ name: "k1ng_op", id: 1337n }],
     dependencies: ["MessageLoggerEnhanced"],
 
     settings,

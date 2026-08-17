@@ -5,10 +5,10 @@ import { addContextMenuPatch, NavContextMenuPatchCallback, removeContextMenuPatc
 import { DataStore, Notifications } from "@api/index"
 import { definePluginSettings } from "@api/Settings"
 import { getCurrentChannel, openUserProfile } from "@utils/discord"
-import { openModal, ModalRoot, ModalHeader, ModalContent, ModalFooter, ModalCloseButton, ModalSize } from "@utils/modal"
 import definePlugin, { OptionType } from "@utils/types"
 import { findByProps } from "@webpack"
-import { ChannelStore, Menu, MessageStore, React, RestAPI, Toasts, UserStore } from "@webpack/common"
+import { ChannelStore, Menu, MessageStore, Modal, openModal, React, RestAPI, Toasts, UserStore } from "@webpack/common"
+import type { JSX } from "react"
 
 import {
     addUser, camelize, displayName, featureOn,
@@ -1600,7 +1600,7 @@ const MUSIC_APP_ICONS: Record<string, string> = {
 // data though — a lot of games (minecraft's xbox rpc included) send just an appId with
 // no assets, so the icon has to come from the app's own public record instead — see below
 const appIconCache: Record<string, string | null> = {}
-const _appIconFetching: Record<string, Promise<string | null>> = {}
+const _appIconFetching: Partial<Record<string, Promise<string | null>>> = {}
 
 async function fetchAppIcon(appId: string): Promise<string | null> {
     if (appId in appIconCache) return appIconCache[appId]
@@ -2273,14 +2273,14 @@ function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                                     {log.metadata.song && (
                                         <div
                                             ref={(el: any) => {
-                                                if (!el || !log.metadata.albumArtUrl) return
+                                                if (!el || !log.metadata?.albumArtUrl) return
                                                 const cached = _albumColorCache[log.metadata.albumArtUrl]
                                                 if (cached) {
                                                     el.style.background = hexToRgba(cached, 0.06)
                                                     el.style.borderColor = hexToRgba(cached, 0.35)
                                                     return
                                                 }
-                                                extractAlbumColor(log.metadata.albumArtUrl).then((hex: string) => {
+                                                extractAlbumColor(log.metadata!.albumArtUrl!).then((hex: string) => {
                                                     if (el) {
                                                         el.style.background = hexToRgba(hex, 0.06)
                                                         el.style.borderColor = hexToRgba(hex, 0.35)
@@ -2666,7 +2666,7 @@ function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                                                             flexShrink: 0,
                                                             boxShadow: `0 0 0 3px ${ch.status === "online" ? "#23a55a30" : ch.status === "idle" ? "#f0b23230" : ch.status === "dnd" ? "#da373c30" : "#80848e30"}`,
                                                         }} />
-                                                        {i < log.metadata.statusTimeline.length - 1 && (
+                                                        {i < log.metadata!.statusTimeline.length - 1 && (
                                                             <div style={{
                                                                 position: "absolute",
                                                                 left: 4,
@@ -2677,7 +2677,7 @@ function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                                                                 borderRadius: 1,
                                                             }} />
                                                         )}
-                                                        <div style={{ flex: 1, minWidth: 0, paddingBottom: i < log.metadata.statusTimeline.length - 1 ? 8 : 0 }}>
+                                                        <div style={{ flex: 1, minWidth: 0, paddingBottom: i < log.metadata!.statusTimeline.length - 1 ? 8 : 0 }}>
                                                             <div style={{
                                                                 display: "flex",
                                                                 alignItems: "center",
@@ -2729,7 +2729,7 @@ function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                                                                     flexShrink: 0,
                                                                     boxShadow: `0 0 0 3px ${C.brandLight}30`,
                                                                 }} />
-                                                                {i < log.metadata.platformTimeline.length - 1 && (
+                                                                {i < log.metadata!.platformTimeline.length - 1 && (
                                                                     <div style={{
                                                                         position: "absolute",
                                                                         left: 4,
@@ -2740,7 +2740,7 @@ function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                                                                         borderRadius: 1,
                                                                     }} />
                                                                 )}
-                                                                <div style={{ flex: 1, minWidth: 0, paddingBottom: i < log.metadata.platformTimeline.length - 1 ? 8 : 0 }}>
+                                                                <div style={{ flex: 1, minWidth: 0, paddingBottom: i < log.metadata!.platformTimeline.length - 1 ? 8 : 0 }}>
                                                                     <div style={{
                                                                         display: "flex",
                                                                         alignItems: "center",
@@ -3654,7 +3654,7 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
         if (val === true) {
             Toasts.show({ type: Toasts.Type.SUCCESS, message: `${dn}: ${featLabel} enabled`, id: Toasts.genId() })
         } else if (val === false) {
-            Toasts.show({ type: Toasts.Type.DEFAULT, message: `${dn}: ${featLabel} disabled`, id: Toasts.genId() })
+            Toasts.show({ type: Toasts.Type.MESSAGE, message: `${dn}: ${featLabel} disabled`, id: Toasts.genId() })
         } else if (val === null) {
             Toasts.show({ type: Toasts.Type.SUCCESS, message: `${dn}: ${featLabel} reset to global`, id: Toasts.genId() })
         }
@@ -3716,7 +3716,7 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
         const label = getWatchedUser(settings, user.id)?.nick
         const u = UserStore.getUser(user.id)
         const name = displayName(u) || user.id
-        Toasts.show({ type: Toasts.Type.DEFAULT, message: `${label ? `${label} (${name})` : name}: all ${OV_TAB_LABELS[ovTab]} disabled`, id: Toasts.genId() })
+        Toasts.show({ type: Toasts.Type.MESSAGE, message: `${label ? `${label} (${name})` : name}: all ${OV_TAB_LABELS[ovTab]} disabled`, id: Toasts.genId() })
     }
 
     const applyPreset = (preset: "stalker" | "lite" | "silent") => {
@@ -3895,8 +3895,10 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
                         const name = displayName(u) || user.id;
                         const av = u ? avatarUrl(u.id, (u as any).avatar, 64) : avatarUrl(user.id, null, 64);
                         openModal(p => (
-                            <ModalRoot {...p} size={ModalSize.LARGE} className="ur-modal-in">
-                                <ModalHeader separator={false}>
+                            <Modal
+                                {...p}
+                                size="lg"
+                                title={
                                     <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}>
                                         <img src={av} style={{ width: 36, height: 36, borderRadius: "50%" }} />
                                         <div>
@@ -3904,17 +3906,13 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
                                             <div style={{ fontSize: 12, color: C.muted }}>Activity Log</div>
                                         </div>
                                     </div>
-                                    <ModalCloseButton onClick={p.onClose} />
-                                </ModalHeader>
-                                <ModalContent>
-                                    <div style={{ padding: "0 12px" }}>
-                                        <UserRadarActivityTab userId={user.id} />
-                                    </div>
-                                </ModalContent>
-                                <ModalFooter>
-                                    <ActivityLogFooter userId={user.id} />
-                                </ModalFooter>
-                            </ModalRoot>
+                                }
+                                preview={<ActivityLogFooter userId={user.id} />}
+                            >
+                                <div className="ur-modal-in" style={{ padding: "0 12px" }}>
+                                    <UserRadarActivityTab userId={user.id} />
+                                </div>
+                            </Modal>
                         ));
                     }}
                     title="Full Activity History"
@@ -4397,8 +4395,10 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
     }, [users, query, sort, pinned])
 
     return (
-        <ModalRoot {...modalProps} size={ModalSize.LARGE} className="ur-modal-in">
-            <ModalHeader separator={false}>
+        <Modal
+            {...modalProps}
+            size="lg"
+            title={
                 <div className="ur-fade-in" style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}>
                     <div className="ur-pulse" style={{
                         width: 36,
@@ -4418,10 +4418,9 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
                         <div style={{ fontSize: 12, color: C.muted }}>watchlist manager</div>
                     </div>
                 </div>
-                <ModalCloseButton onClick={modalProps.onClose} />
-            </ModalHeader>
-
-            <ModalContent>
+            }
+        >
+            <div className="ur-modal-in">
                 <div className="ur-scrollbar" style={{ padding: "0 16px", maxHeight: "60vh", overflowY: "auto" }}>
                     <AddUserSection onAdded={refresh} />
 
@@ -4497,9 +4496,7 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
                         />
                     ))}
                 </div>
-            </ModalContent>
 
-            <ModalFooter>
                 <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", gap: 8 }}>
                     <div style={{ display: "flex", gap: 8 }}>
                         <button
@@ -4652,8 +4649,8 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
                         close
                     </button>
                 </div>
-            </ModalFooter>
-        </ModalRoot>
+            </div>
+        </Modal>
     )
 }
 
@@ -4670,7 +4667,7 @@ const userCtxPatch: NavContextMenuPatchCallback = (children, { user }) => {
                 label={isW ? "Unwatch User" : "Watch User"}
                 icon={isW ? CtxEyeOffIcon : CtxEyeIcon}
                 action={() => {
-                    if (isW) { removeUser(settings, user.id); purgeUserCaches(user.id); Toasts.show({ type: Toasts.Type.DEFAULT, message: `removed ${displayName(user)} from watchlist`, id: Toasts.genId() }) }
+                    if (isW) { removeUser(settings, user.id); purgeUserCaches(user.id); Toasts.show({ type: Toasts.Type.MESSAGE, message: `removed ${displayName(user)} from watchlist`, id: Toasts.genId() }) }
                     else { addUser(settings, user.id); fetchNewUserBaseline(user.id); Toasts.show({ type: Toasts.Type.SUCCESS, message: `added ${displayName(user)} to watchlist`, id: Toasts.genId() }) }
                 }}
 
@@ -4697,7 +4694,7 @@ const msgCtxPatch: NavContextMenuPatchCallback = (children, { message }) => {
                 label={isW ? "remove author from watchlist" : "add author to watchlist"}
                 icon={isW ? CtxEyeOffIcon : CtxEyeIcon}
                 action={() => {
-                    if (isW) { removeUser(settings, message.author.id); purgeUserCaches(message.author.id); Toasts.show({ type: Toasts.Type.DEFAULT, message: `removed ${displayName(message.author)} from watchlist`, id: Toasts.genId() }) }
+                    if (isW) { removeUser(settings, message.author.id); purgeUserCaches(message.author.id); Toasts.show({ type: Toasts.Type.MESSAGE, message: `removed ${displayName(message.author)} from watchlist`, id: Toasts.genId() }) }
                     else { addUser(settings, message.author.id); fetchNewUserBaseline(message.author.id); Toasts.show({ type: Toasts.Type.SUCCESS, message: `added ${displayName(message.author)} to watchlist`, id: Toasts.genId() }) }
                 }}
 
@@ -4781,8 +4778,10 @@ function injectDMActivityButton() {
         const name = displayName(u) || recipientId
         const av = u ? avatarUrl(u.id, (u as any).avatar, 64) : avatarUrl(recipientId, null, 64)
         openModal(p => (
-            <ModalRoot {...p} size={ModalSize.LARGE} className="ur-modal-in">
-                <ModalHeader separator={false}>
+            <Modal
+                {...p}
+                size="lg"
+                title={
                     <div style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}>
                         <img src={av} style={{ width: 36, height: 36, borderRadius: "50%" }} />
                         <div>
@@ -4790,17 +4789,13 @@ function injectDMActivityButton() {
                             <div style={{ fontSize: 12, color: C.muted }}>Activity Log</div>
                         </div>
                     </div>
-                    <ModalCloseButton onClick={p.onClose} />
-                </ModalHeader>
-                <ModalContent>
-                    <div style={{ padding: "0 12px" }}>
-                        <UserRadarActivityTab userId={recipientId} />
-                    </div>
-                </ModalContent>
-                <ModalFooter>
-                    <ActivityLogFooter userId={recipientId} />
-                </ModalFooter>
-            </ModalRoot>
+                }
+                preview={<ActivityLogFooter userId={recipientId} />}
+            >
+                <div className="ur-modal-in" style={{ padding: "0 12px" }}>
+                    <UserRadarActivityTab userId={recipientId} />
+                </div>
+            </Modal>
         ))
     }
 
@@ -5235,7 +5230,7 @@ async function handlePresenceUpdate(uid: string, u: any, isStartup: boolean) {
 export default definePlugin({
     name: "UserRadar",
     description: "track watched users and get notified on messages, edits, deletes, typing, profile/avatar changes, voice, status, activity, and server joins",
-    authors: [{ name: "k1ng_op", id: 641266820187160576 }],
+    authors: [{ name: "k1ng_op", id: 641266820187160576n }],
     settings,
 
     start() {
@@ -5466,7 +5461,7 @@ export default definePlugin({
                     _uid: uid,
                     title: `${dn} edited a message`,
                     body: notifyBody,
-                    icon: avatarUrl(uid, message.author?.avatar, 80),
+                    icon: avatarUrl(uid, (message.author as any)?.avatar, 80),
                     onClick: () => jumpTo(ch?.guild_id, message.channel_id, message.id),
                 })
             }

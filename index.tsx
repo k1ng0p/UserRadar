@@ -7,8 +7,10 @@ import { definePluginSettings } from "@api/Settings"
 import { getCurrentChannel, openUserProfile } from "@utils/discord"
 import definePlugin, { OptionType } from "@utils/types"
 import { findByProps } from "@webpack"
-import { ChannelStore, Menu, MessageStore, Modal, openModal, React, RestAPI, Toasts, UserStore } from "@webpack/common"
+import { ChannelStore, Menu, MessageStore, Modal, openModal, React, RestAPI, showToast, UserStore } from "@webpack/common"
 import type { JSX } from "react"
+
+import { STYLES } from "./styles"
 
 import {
     addUser, camelize, displayName, featureOn,
@@ -29,7 +31,53 @@ const STATUS_EMOJI_LOCAL: Record<string, string> = {
     offline: "⚫",
     invisible: "⚫",
 }
-const ACTIVITY_LOG_KEY = "UserRadar_ActivityLog_v2"
+const LEGACY_LOG_KEY = "UserRadar_ActivityLog_v2"
+const LOG_KEY_PREFIX = "UserRadar_ActivityLog_v3_"
+const MAX_LOGS_HARD_CAP = 50000
+const SAVE_DELAY_MS = 1500
+const LITE_FEATURES = ["msgs", "deletes", "typing", "avatar", "voice", "status"]
+
+const IMAGE_HOSTS = new Set([
+    "cdn.discordapp.com", "media.discordapp.net", "i.scdn.co",
+    "static-cdn.jtvnw.net", "i.ytimg.com", "cdn.simpleicons.org",
+])
+const IMAGE_META_KEYS = ["oldAvatar", "newAvatar", "albumArtUrl", "gameIconUrl", "iconUrl", "smallImage"]
+
+function safeImageUrl(v: unknown): string | undefined {
+    if (typeof v !== "string") return
+    try {
+        const u = new URL(v)
+        return u.protocol === "https:" && IMAGE_HOSTS.has(u.hostname) ? v : undefined
+    } catch { }
+}
+
+// returns null if the entry is structurally broken
+function cleanImportedEntry(uid: string, e: any): ActivityEntry | null {
+    if (typeof e !== "object" || e === null) return null
+    if (typeof e.id !== "string" || typeof e.type !== "string") return null
+    if (typeof e.ts !== "number" || !Number.isFinite(e.ts)) return null
+    const str = (v: unknown) => typeof v === "string" ? v : ""
+    const opt = (v: unknown) => typeof v === "string" ? v : undefined
+
+    let metadata: Record<string, any> | undefined
+    if (e.metadata && typeof e.metadata === "object" && !Array.isArray(e.metadata)) {
+        const meta: Record<string, any> = { ...e.metadata }
+        for (const k of IMAGE_META_KEYS) {
+            if (!(k in meta)) continue
+            const url = safeImageUrl(meta[k])
+            if (url) meta[k] = url
+            else delete meta[k]
+        }
+        metadata = meta
+    }
+
+    return {
+        id: e.id, uid, ts: e.ts, type: e.type as ActivityType,
+        icon: str(e.icon), title: str(e.title), body: str(e.body),
+        guildId: opt(e.guildId), channelId: opt(e.channelId), msgId: opt(e.msgId),
+        metadata,
+    }
+}
 export type ActivityType =
     | "msg" | "edit" | "delete" | "typing"
     | "status" | "activity" | "voice"
@@ -61,95 +109,128 @@ function sessionKey(uid: string, type: string, channelId?: string): string {
 
 class ActivityStore {
     private cache: Record<string, ActivityEntry[]> = {}
-    private loaded = false
+    private dirty = new Set<string>()
+    private removed = new Set<string>()
     private loadPromise: Promise<void> | null = null
+    private saveTimer: ReturnType<typeof setTimeout> | null = null
+    // serializes writes so addLog/removeLog/updateLog never interleave
+    private writeQueue: Promise<any> = Promise.resolve()
 
-    async load() {
-        if (this.loaded) return
-        if (this.loadPromise) return this.loadPromise
-        this.loadPromise = (async () => {
-            try {
-                const data = await DataStore.get(ACTIVITY_LOG_KEY)
-                if (data) this.cache = JSON.parse(data)
-            } catch (e) { console.error("[UserRadar] Failed to load activity log", e) }
-            this.loaded = true
-        })()
-        return this.loadPromise
+    load() {
+        return this.loadPromise ??= this.readAll()
     }
 
-    async save() {
+    private async readAll() {
         try {
-            await DataStore.set(ACTIVITY_LOG_KEY, JSON.stringify(this.cache))
-        } catch (e) { console.error("[UserRadar] Failed to save activity log", e) }
+            const keys = (await DataStore.keys<string>()).filter(k => typeof k === "string" && k.startsWith(LOG_KEY_PREFIX))
+            for (const k of keys) {
+                try {
+                    const raw = await DataStore.get(k)
+                    if (raw) this.cache[k.slice(LOG_KEY_PREFIX.length)] = JSON.parse(raw)
+                } catch (e) { log.error("skipping unreadable log", k, e) }
+            }
+
+            // one-time move from the old single-blob log
+            const legacy = await DataStore.get(LEGACY_LOG_KEY)
+            if (legacy) {
+                const old = JSON.parse(legacy) as Record<string, ActivityEntry[]>
+                for (const [uid, entries] of Object.entries(old)) {
+                    if (this.cache[uid]) continue
+                    this.cache[uid] = entries
+                    this.dirty.add(uid)
+                }
+                if (await this.writeDirty()) await DataStore.del(LEGACY_LOG_KEY)
+            }
+        } catch (e) { log.error("failed to load activity log", e) }
+    }
+
+    private markDirty(uid: string) {
+        this.removed.delete(uid)
+        this.dirty.add(uid)
+        this.scheduleSave()
     }
 
     // batches rapid writes into one save
-    private saveTimer: ReturnType<typeof setTimeout> | null = null
-    private pendingSave: { resolve: () => void }[] = []
-    private scheduleSave(): Promise<void> {
-        return new Promise(resolve => {
-            this.pendingSave.push({ resolve })
-            if (this.saveTimer) return
-            this.saveTimer = setTimeout(async () => {
-                this.saveTimer = null
-                const waiters = this.pendingSave
-                this.pendingSave = []
-                await this.save()
-                waiters.forEach(w => w.resolve())
-            }, 1500)
-        })
+    private scheduleSave() {
+        if (this.saveTimer) return
+        this.saveTimer = setTimeout(() => {
+            this.saveTimer = null
+            this.writeDirty()
+        }, SAVE_DELAY_MS)
     }
-    // forces the pending debounced save through immediately
+
     async flushSave() {
         if (this.saveTimer) { clearTimeout(this.saveTimer); this.saveTimer = null }
-        const waiters = this.pendingSave
-        this.pendingSave = []
-        await this.save()
-        waiters.forEach(w => w.resolve())
+        await this.writeDirty()
+    }
+
+    private async writeDirty(): Promise<boolean> {
+        const toWrite = [...this.dirty]
+        const toDelete = [...this.removed]
+        this.dirty.clear()
+        this.removed.clear()
+        try {
+            for (const uid of toWrite) await DataStore.set(LOG_KEY_PREFIX + uid, JSON.stringify(this.cache[uid] ?? []))
+            for (const uid of toDelete) await DataStore.del(LOG_KEY_PREFIX + uid)
+            return true
+        } catch (e) {
+            log.error("failed to save activity log", e)
+            toWrite.forEach(uid => this.dirty.add(uid))
+            toDelete.forEach(uid => this.removed.add(uid))
+            return false
+        }
     }
 
     getLogs(uid: string): ActivityEntry[] {
         return this.cache[uid] || []
     }
 
-    // serializes writes so addLog/removeLog/updateLog never interleave
-    private writeQueue: Promise<any> = Promise.resolve()
     private enqueue<T>(fn: () => Promise<T>): Promise<T> {
         const next = this.writeQueue.then(fn, fn)
         this.writeQueue = next.catch(() => {})
         return next
     }
 
-    async addLog(entry: Omit<ActivityEntry, "id">) {
+    addLog(entry: Omit<ActivityEntry, "id">) {
         return this.enqueue(async () => {
             await this.load()
-            if (!this.cache[entry.uid]) this.cache[entry.uid] = []
+            const logs = this.cache[entry.uid] ??= []
             const fullEntry: ActivityEntry = {
                 ...entry,
                 id: `${entry.uid}_${entry.ts}_${Math.random().toString(36).slice(2, 8)}`,
             }
-            this.cache[entry.uid].unshift(fullEntry)
+            logs.unshift(fullEntry)
+
             const rawMax = settings.store.maxLogsPerUser
-            const max = rawMax < 0 ? 0 : Math.min(rawMax, 50000)
-            if (max > 0 && this.cache[entry.uid].length > max)
-                this.cache[entry.uid].length = max
-            await this.scheduleSave()
+            const max = rawMax > 0 ? Math.min(rawMax, MAX_LOGS_HARD_CAP) : MAX_LOGS_HARD_CAP
+            if (logs.length > max) logs.length = max
+
+            this.markDirty(entry.uid)
             return fullEntry
+        }).catch(e => {
+            log.error("failed to add log", e)
+            throw e
         })
     }
 
-    async clearLogs(uid: string) {
+    clearLogs(uid: string) {
         return this.enqueue(async () => {
             await this.load()
             delete this.cache[uid]
-            await this.save()
+            this.dirty.delete(uid)
+            this.removed.add(uid)
+            await this.writeDirty()
         })
     }
 
-    async clearAll() {
+    clearAll() {
         return this.enqueue(async () => {
+            await this.load()
+            for (const uid of Object.keys(this.cache)) this.removed.add(uid)
             this.cache = {}
-            await DataStore.del(ACTIVITY_LOG_KEY)
+            this.dirty.clear()
+            await this.writeDirty()
+            await DataStore.del(LEGACY_LOG_KEY)
         })
     }
 
@@ -157,32 +238,35 @@ class ActivityStore {
         return JSON.stringify(this.cache, null, 2)
     }
 
-    async importAll(json: string) {
+    importAll(json: string) {
         return this.enqueue(async () => {
             try {
                 const parsed = JSON.parse(json)
-                // Validate it's a plain object whose values are arrays of entries
                 if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return false
+
+                const cleaned: Record<string, ActivityEntry[]> = {}
                 for (const [uid, entries] of Object.entries(parsed)) {
-                    if (typeof uid !== "string") return false
-                    if (!Array.isArray(entries)) return false
-                    for (const e of entries as any[]) {
-                        if (typeof e !== "object" || e === null) return false
-                        if (typeof e.id !== "string" || typeof e.uid !== "string" || typeof e.ts !== "number") return false
+                    if (!/^\d{5,25}$/.test(uid) || !Array.isArray(entries)) return false
+                    cleaned[uid] = []
+                    for (const raw of entries) {
+                        const e = cleanImportedEntry(uid, raw)
+                        if (!e) return false
+                        cleaned[uid].push(e)
                     }
                 }
+
                 await this.load()
-                // merge by id, don't replace whole cache — category export would wipe everything
-                for (const [uid, entries] of Object.entries(parsed as Record<string, ActivityEntry[]>)) {
-                    if (!this.cache[uid]) this.cache[uid] = []
-                    const existingIds = new Set(this.cache[uid].map(e => e.id))
-                    for (const e of entries) {
-                        if (!existingIds.has(e.id)) this.cache[uid].push(e)
-                    }
-                    this.cache[uid].sort((a, b) => b.ts - a.ts)
+                // merge by id, a category export must not wipe everything else
+                for (const [uid, entries] of Object.entries(cleaned)) {
+                    const logs = this.cache[uid] ??= []
+                    const seen = new Set(logs.map(e => e.id))
+                    for (const e of entries) if (!seen.has(e.id)) logs.push(e)
+                    logs.sort((a, b) => b.ts - a.ts)
+                    if (logs.length > MAX_LOGS_HARD_CAP) logs.length = MAX_LOGS_HARD_CAP
+                    this.dirty.add(uid)
+                    this.removed.delete(uid)
                 }
-                await this.save()
-                return true
+                return await this.writeDirty()
             } catch { return false }
         })
     }
@@ -194,10 +278,11 @@ class ActivityStore {
             if (!logs) return false
             const idx = logs.findIndex(l => l.id === logId)
             if (idx === -1) return false
+
             const updated = { ...logs[idx], ...updates, ts: Date.now() }
             logs.splice(idx, 1)
             logs.unshift(updated)
-            await this.save()
+            this.markDirty(uid)
             emitActivityUpdate(uid, updated)
             return true
         })
@@ -209,13 +294,13 @@ class ActivityStore {
             const logs = this.cache[uid]
             if (!logs) return false
             this.cache[uid] = logs.filter(l => l.id !== logId)
-            await this.save()
+            this.markDirty(uid)
             emitActivityRemove(uid, logId)
             return true
         })
     }
 
-    // bulk delete — e.g. "remove all typing cards" / "remove all status cards" for a user
+    // bulk delete, e.g. "remove all typing cards" for a user
     async removeLogsWhere(uid: string, predicate: (log: ActivityEntry) => boolean): Promise<number> {
         return this.enqueue(async () => {
             await this.load()
@@ -224,7 +309,7 @@ class ActivityStore {
             const toRemove = logs.filter(predicate)
             if (toRemove.length === 0) return 0
             this.cache[uid] = logs.filter(l => !predicate(l))
-            await this.save()
+            this.markDirty(uid)
             toRemove.forEach(l => emitActivityRemove(uid, l.id))
             return toRemove.length
         })
@@ -301,9 +386,14 @@ const TYPING_LOG_TTL_MS = 3 * 60 * 1000
 // persisted so a discord restart doesn't orphan whatever was mid-session
 const ACTIVE_SESSIONS_KEY = "UserRadar_ActiveSessions_v1"
 
+let lastSavedSessions = ""
 async function saveActiveSessions() {
-    try { await DataStore.set(ACTIVE_SESSIONS_KEY, JSON.stringify(activeSessions)) }
-    catch (e) { log.warn("[UserRadar] failed to save active sessions", e) }
+    const json = JSON.stringify(activeSessions)
+    if (json === lastSavedSessions) return
+    try {
+        await DataStore.set(ACTIVE_SESSIONS_KEY, json)
+        lastSavedSessions = json
+    } catch (e) { log.warn("failed to save active sessions", e) }
 }
 
 async function loadActiveSessions(): Promise<Record<string, { logId: string; startTime: number; channelId?: string; guildId?: string; metadata?: any }>> {
@@ -347,21 +437,10 @@ let pluginActive = false
 
 function tryLoadLoggedMsgs() {
     try {
-        const plugin = (Vencord as any)?.Plugins?.plugins?.["vc-message-logger-enhanced"]
-            ?? (Vencord as any)?.Plugins?.plugins?.["MessageLoggerEnhanced"]
-            ?? (Vencord as any)?.Plugins?.plugins?.["messageLoggerEnhanced"]
-        if (plugin?.loggedMessages) return plugin.loggedMessages
-        if (plugin?.store?.loggedMessages) return plugin.store.loggedMessages
-    } catch { }
-
-    try {
-        const { wreq } = (window as any).webpackChunkdiscord_app?.find?.(
-            (x: any) => x?.[1]?.["loggedMessages"]
-        )?.[1] ?? {}
-        if (wreq?.["loggedMessages"]) return wreq["loggedMessages"]
-    } catch { }
-
-    return null
+        const plugins = (Vencord as any)?.Plugins?.plugins
+        const plugin = plugins?.["vc-message-logger-enhanced"] ?? plugins?.["MessageLoggerEnhanced"]
+        return plugin?.loggedMessages ?? plugin?.store?.loggedMessages ?? null
+    } catch { return null }
 }
 
 const settings = definePluginSettings({
@@ -384,7 +463,7 @@ const settings = definePluginSettings({
     quietStart:         { type: OptionType.STRING,  default: "23:00",                description: "quiet hours start (24h, e.g. 23:00)" },
     quietEnd:           { type: OptionType.STRING,  default: "07:00",                description: "quiet hours end (24h, e.g. 07:00)" },
     skipCurrentChannel: { type: OptionType.BOOLEAN, default: true,                   description: "skip if already in that channel" },
-    maxLogsPerUser:     { type: OptionType.NUMBER,  default: 500,                    description: "max logs per user (0 = unlimited)" },
+    maxLogsPerUser:     { type: OptionType.NUMBER,  default: 500,                    description: "max logs per user (0 = 50000)" },
     pinnedUsers:        { type: OptionType.STRING,  hidden: true,  default: "[]",    description: "pinned watchlist user ids" },
     compactLogView:     { type: OptionType.BOOLEAN, default: false,                  description: "compact activity log cards" },
     autoCleanupLogs:    { type: OptionType.BOOLEAN, default: true,                   description: "delete logs when removing a user from watchlist" },
@@ -443,14 +522,9 @@ function togglePin(uid: string) {
 function isFeatureOn(uid: string, userKey: keyof WatchedUser["overrides"], globalKey: string): boolean {
     if (!isWatched(settings, uid)) return false
     const mode = settings.store.globalPresetMode ?? "custom"
-    if (mode !== "custom") {
-        if (mode === "silent") return false
-        if (mode === "stalker") return true
-        if (mode === "lite") {
-            const liteFeatures = ["msgs", "deletes", "typing", "avatar", "voice", "status"]
-            return liteFeatures.includes(userKey as string)
-        }
-    }
+    if (mode === "stalker") return true
+    if (mode === "lite") return LITE_FEATURES.includes(userKey)
+    // custom and silent: silent only mutes notify(), logging follows the normal settings
     return featureOn(settings, uid, userKey, globalKey)
 }
 
@@ -462,9 +536,16 @@ const STATUS_LABEL: Record<string, string> = { online: "Online", idle: "Away", d
 const ACT_VERB: Record<number, string> = { 0: "playing", 2: "listening to", 3: "watching", 5: "competing in" }
 const isOfflineStatus = (s: string) => s === "offline" || s === "invisible"
 
+function labeledName(uid: string, user: any): string {
+    const nick = getWatchedUser(settings, uid)?.nick
+    const name = displayName(user) || uid
+    return nick ? `${nick} (${name})` : name
+}
+
 function notify(opts: { title: string; body: string; icon?: string; onClick?: () => void; _uid?: string }) {
     if (inQuietHours(settings)) return
     if (settings.store.globalPresetMode === "silent") return
+    if (opts._uid && getWatchedUser(settings, opts._uid)?.muted) return
 
     // title already has the name baked in, unique per user
     const key = `${opts._uid ?? opts.title}\x00${opts.title}\x00${opts.body}`
@@ -532,9 +613,7 @@ function checkProfileChanged(uid: string, fresh: any) {
     const newAvatar = fresh.user?.avatar ?? fresh.user?.avatarUrl ?? null
     if (newAvatar !== oldAvatar) {
         if (isFeatureOn(uid, "avatar", "globalAvatar")) {
-            const name  = displayName(fresh.user)
-            const label = getWatchedUser(settings, uid)?.nick
-            const dn    = label ? `${label} (${name})` : name
+            const dn = labeledName(uid, fresh.user)
             const oldAvatarUrl = oldAvatar ? avatarUrl(uid, oldAvatar, 256) : null
             const newAvatarUrl = newAvatar ? avatarUrl(uid, newAvatar, 256) : null
             notify({
@@ -555,9 +634,7 @@ function checkProfileChanged(uid: string, fresh: any) {
     // text profile fields — one log per changed field
     if (isFeatureOn(uid, "profile", "globalProfile")) {
         const u     = UserStore.getUser(uid)
-        const name  = displayName(fresh.user)
-        const label = getWatchedUser(settings, uid)?.nick
-        const dn    = label ? `${label} (${name})` : name
+        const dn = labeledName(uid, fresh.user)
         const icon  = u ? avatarUrl(u.id, (u as any).avatar) : undefined
 
         for (const f of PROFILE_TEXT) {
@@ -661,139 +738,7 @@ function injectStyles() {
     if (document.getElementById(STYLE_ID)) return
     const s = document.createElement("style")
     s.id = STYLE_ID
-    s.textContent = `
-        @keyframes ur-spin { to { transform:rotate(360deg) } }
-        .ur-spin { display:inline-block;width:14px;height:14px;border-radius:50%;
-            border:2.5px solid #3f4147;border-top-color:#dbdee1;
-            animation:ur-spin .55s linear infinite;vertical-align:middle; }
-        @keyframes ur-fade-in { from { opacity:0;transform:translateY(-4px) } to { opacity:1;transform:translateY(0) } }
-        .ur-fade-in { animation:ur-fade-in .2s cubic-bezier(.4,0,.2,1) forwards; }
-        .ur-expand { display:grid;grid-template-rows:0fr;transition:grid-template-rows .3s cubic-bezier(.4,0,.2,1); }
-        .ur-expand.open { grid-template-rows:1fr; }
-        .ur-expand > div { overflow:hidden; }
-        .ur-row-hover:hover { background:rgba(255,255,255,0.06); }
-
-        @keyframes ur-row-in { from { opacity:0; transform:translateY(6px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
-        .ur-row { animation: ur-row-in .28s cubic-bezier(.2,.9,.3,1.2) both; transition: transform .2s cubic-bezier(.2,.8,.2,1.1), box-shadow .2s ease, background .2s ease, border-color .18s ease; }
-        .ur-row:hover { transform: translateY(-3px) scale(1.008); box-shadow: 0 14px 30px rgba(0,0,0,0.38); border-color: #3f4147; background: linear-gradient(135deg, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.1) 100%) !important; }
-        .ur-row:active { transform: translateY(-1px) scale(.995); }
-        .ur-row.open { box-shadow: 0 8px 22px rgba(0,0,0,0.3); }
-
-        .ur-row-avatar { transition: transform .2s cubic-bezier(.2,.8,.2,1.4); }
-        .ur-row:hover .ur-row-avatar { transform: scale(1.08); }
-
-        .ur-row-pin { transition: opacity .12s ease, color .12s ease, transform .22s cubic-bezier(.34,1.56,.64,1); }
-        .ur-row:hover .ur-row-pin { transform: scale(1.12); }
-
-        .ur-row-chevron { display:flex; align-items:center; justify-content:center; color:#949ba4; flex-shrink:0; opacity:.55; transition: transform .28s cubic-bezier(.4,0,.2,1), opacity .18s ease, color .18s ease; }
-        .ur-row:hover .ur-row-chevron { opacity:1; transform: scale(1.15); }
-        .ur-row-chevron.open { transform: rotate(180deg); opacity:1; color:#949cf4; }
-        .ur-row:hover .ur-row-chevron.open { transform: rotate(180deg) scale(1.15); }
-
-        .ur-badge-in { animation: ur-badge-in .25s cubic-bezier(.34,1.56,.64,1) both; transition: transform .18s cubic-bezier(.2,.8,.2,1.3); }
-        .ur-row:hover .ur-badge-in { transform: scale(1.07); }
-
-        .ur-activity-btn { transition: transform .22s cubic-bezier(.34,1.56,.64,1), background .18s ease, border-color .18s ease, box-shadow .22s ease; backdrop-filter: blur(8px) saturate(160%); -webkit-backdrop-filter: blur(8px) saturate(160%); }
-        .ur-activity-btn:hover { transform: translateY(-2px) scale(1.06); background: rgba(88,101,242,0.18) !important; border-color: rgba(88,101,242,0.5) !important; box-shadow: 0 6px 16px rgba(88,101,242,0.28); }
-        .ur-activity-btn:active { transform: translateY(0) scale(.95); }
-
-        @keyframes ur-pin-pop { 0% { transform:scale(.6) rotate(-20deg); } 60% { transform:scale(1.25) rotate(6deg); } 100% { transform:scale(1) rotate(0); } }
-        .ur-pin-pop { animation: ur-pin-pop .38s cubic-bezier(.34,1.56,.64,1) both; }
-
-        .ur-chip { transition: transform .12s cubic-bezier(.2,.8,.2,1), background .18s ease, color .18s ease; }
-        .ur-chip:active { transform: scale(.94); }
-
-        @keyframes ur-badge-in { from { opacity:0; transform:scale(.5); } to { opacity:1; transform:scale(1); } }
-        .ur-badge-in { animation: ur-badge-in .25s cubic-bezier(.34,1.56,.64,1) both; }
-
-        .ur-icon-btn { transition: transform .14s cubic-bezier(.2,.8,.2,1.3), background .14s ease, color .14s ease; }
-        .ur-icon-btn:hover { transform: translateY(-1px) scale(1.08); }
-        .ur-icon-btn:active { transform: scale(.9); }
-
-        @keyframes ur-float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-6px); } }
-        .ur-float { animation: ur-float 3s ease-in-out infinite; }
-
-        /* Discord-style thin scrollbar - only visible on hover */
-        .ur-scrollbar::-webkit-scrollbar { width:4px; height:4px; }
-        .ur-scrollbar::-webkit-scrollbar-track { background:transparent; }
-        .ur-scrollbar::-webkit-scrollbar-thumb { background:transparent; border-radius:4px; }
-        .ur-scrollbar:hover::-webkit-scrollbar-thumb { background:#3f4147; }
-        .ur-scrollbar::-webkit-scrollbar-thumb:hover { background:#4a4a6e; }
-
-        /* Firefox scrollbar */
-        .ur-scrollbar { scrollbar-width: thin; scrollbar-color: transparent transparent; }
-        .ur-scrollbar:hover { scrollbar-color: #3f4147 transparent; }
-
-        .ur-typing-dot { animation: ur-typing 1.4s infinite ease-in-out both; }
-        .ur-typing-dot:nth-child(1) { animation-delay: -0.32s; }
-        .ur-typing-dot:nth-child(2) { animation-delay: -0.16s; }
-        @keyframes ur-typing { 0%, 80%, 100% { transform: scale(0); } 40% { transform: scale(1); } }
-        @keyframes ur-shake { 0%, 100% { transform: translateX(0); } 10%, 30%, 50%, 70%, 90% { transform: translateX(-4px); } 20%, 40%, 60%, 80% { transform: translateX(4px); } }
-        .ur-shake { animation: ur-shake 0.5s cubic-bezier(.36,.07,.19,.97) both; }
-        @keyframes ur-pulse { 0% { box-shadow: 0 0 0 0 #5865f2; } 70% { box-shadow: 0 0 0 6px transparent; } 100% { box-shadow: 0 0 0 0 transparent; } }
-        .ur-pulse { animation: ur-pulse 2s infinite; }
-        @keyframes ur-flash-green { 0% { background: #248046; } 100% { background: #5865f2; } }
-        .ur-flash-green { animation: ur-flash-green 0.5s ease; }
-        @keyframes ur-blink-dot { 0%, 100% { opacity: 1; transform: scale(1); } 50% { opacity: 0.25; transform: scale(0.7); } }
-        .ur-blink-dot { animation: ur-blink-dot 1.4s ease-in-out infinite; }
-
-        .ur-compact [data-ur-card-body] { padding: 6px 10px !important; gap: 8px !important; margin-bottom: 3px !important; min-height: 0 !important; border-radius: 10px !important; }
-        .ur-compact [data-ur-card-icon] { width: 22px !important; height: 22px !important; border-radius: 6px !important; font-size: 12px !important; margin-top: 0 !important; }
-        .ur-compact [data-ur-card-icon] img { width: 14px !important; height: 14px !important; }
-        .ur-compact [data-ur-card-title] { font-size: 12px !important; margin-bottom: 0 !important; gap: 5px !important; }
-        .ur-compact [data-ur-card-body-text="meta"] { display: none !important; }
-        .ur-compact [data-ur-card-body-text="content"] { font-size: 11px !important; margin-top: 0 !important; -webkit-line-clamp: 1; display: -webkit-box !important; -webkit-box-orient: vertical; overflow: hidden; }
-        .ur-compact [data-ur-card-location] { display: none !important; }
-        .ur-compact [data-ur-card-live] { padding: 1px 5px !important; font-size: 8px !important; margin-bottom: 0 !important; }
-        .ur-compact { gap: 4px !important; }
-        .ur-compact [data-ur-day-header] { margin-bottom: 3px !important; }
-
-        /* Activity log modal specific - prevent horizontal scroll */
-        .ur-activity-modal { overflow-x: hidden !important; }
-        .ur-activity-modal * { max-width: 100%; box-sizing: border-box; }
-
-        /* glassmorphism helpers */
-        .ur-glass { backdrop-filter: blur(14px) saturate(160%); -webkit-backdrop-filter: blur(14px) saturate(160%); }
-        .ur-badge-glass { backdrop-filter: blur(6px); -webkit-backdrop-filter: blur(6px); }
-
-        .ur-tab-btn { transition: transform 160ms cubic-bezier(.34,1.56,.64,1), background 200ms ease, color 200ms ease, box-shadow 200ms ease; }
-        .ur-tab-btn:hover { transform: translateY(-1px) scale(1.03); }
-        .ur-tab-btn:active { transform: scale(.95); }
-
-        .ur-preset-card { transition: transform 200ms cubic-bezier(.34,1.56,.64,1), background 220ms ease, border-color 220ms ease, box-shadow 220ms ease; }
-        .ur-preset-card:hover { transform: translateY(-2px) scale(1.015); }
-        .ur-preset-card:active { transform: translateY(0) scale(.985); }
-
-        @keyframes ur-modal-in { from { opacity:0; transform:scale(.97) translateY(8px); } to { opacity:1; transform:scale(1) translateY(0); } }
-        .ur-modal-in { animation: ur-modal-in .28s cubic-bezier(.2,.9,.3,1.1) both; }
-
-        @keyframes ur-status-pop { from { opacity:0; transform:scale(.4); } to { opacity:1; transform:scale(1); } }
-        .ur-status-dot { animation: ur-status-pop .3s cubic-bezier(.34,1.56,.64,1) both; transition: background 200ms ease, box-shadow 200ms ease; }
-
-        .ur-card-hover { transition: transform 180ms cubic-bezier(.2,.8,.2,1), box-shadow 180ms ease, border-color 180ms ease, background 180ms ease; }
-        .ur-card-hover:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0,0,0,0.3); }
-
-        @keyframes ur-log-in { from { opacity:0; transform:translateY(6px) scale(.98); } to { opacity:1; transform:translateY(0) scale(1); } }
-        .ur-log-card { animation: ur-log-in .26s cubic-bezier(.2,.9,.3,1.15) both; transition: transform .2s cubic-bezier(.2,.8,.2,1.1), box-shadow .2s ease, background .2s ease, border-color .18s ease; }
-        .ur-log-card:hover { transform: translateY(-3px) scale(1.008); box-shadow: 0 14px 30px rgba(0,0,0,0.38); border-color: #3f4147; background: linear-gradient(135deg, rgba(0,0,0,0.22) 0%, rgba(0,0,0,0.1) 100%) !important; }
-        .ur-log-card:active { transform: translateY(-1px) scale(.995); }
-        .ur-log-card.open { box-shadow: 0 8px 22px rgba(0,0,0,0.3); }
-
-        .ur-log-icon { transition: transform .22s cubic-bezier(.2,.8,.2,1.4), box-shadow .22s ease; }
-        .ur-log-card:hover .ur-log-icon { transform: scale(1.08) rotate(-4deg); }
-
-        .ur-log-chevron { display:flex; align-items:center; justify-content:center; color:#949ba4; flex-shrink:0; opacity:.55; transition: transform .28s cubic-bezier(.4,0,.2,1), opacity .18s ease, color .18s ease; }
-        .ur-log-card:hover .ur-log-chevron { opacity:1; }
-        .ur-log-chevron.open { transform: rotate(180deg); opacity:1; color:#949cf4; }
-
-        .ur-log-expand-in { animation: ur-fade-in .22s cubic-bezier(.4,0,.2,1) both; }
-
-        .ur-footer-btn { transition: transform .2s cubic-bezier(.34,1.56,.64,1), background .18s ease, border-color .18s ease, box-shadow .2s ease, color .18s ease; backdrop-filter: blur(10px) saturate(160%); -webkit-backdrop-filter: blur(10px) saturate(160%); }
-        .ur-footer-btn:hover { transform: translateY(-2px) scale(1.04); background: rgba(255,255,255,0.09) !important; border-color: #3f4147 !important; box-shadow: 0 6px 16px rgba(0,0,0,0.3); }
-        .ur-footer-btn:active { transform: translateY(0) scale(.94); }
-        .ur-footer-btn-danger:hover { background: rgba(218,55,60,0.2) !important; border-color: #da373c !important; box-shadow: 0 6px 16px rgba(218,55,60,0.3); }
-        .ur-footer-btn-primary:hover { background: #5865f2 !important; border-color: #5865f2 !important; color: #fff !important; box-shadow: 0 6px 18px rgba(88,101,242,0.4); }
-    `
+    s.textContent = STYLES
     document.head.appendChild(s)
 }
 
@@ -1561,9 +1506,7 @@ function SearchInput({ query, setQuery }: { query: string; setQuery: (v: string)
 
 function previewNotification(uid: string, type: string) {
     const u = UserStore.getUser(uid)
-    const label = getWatchedUser(settings, uid)?.nick
-    const name = displayName(u) || uid
-    const dn = label ? `${label} (${name})` : name
+    const dn = labeledName(uid, u)
     const icon = u ? avatarUrl(u.id, (u as any).avatar) : undefined
 
     const previews: Record<string, { title: string; body: string }> = {
@@ -3381,6 +3324,7 @@ function ActivityLogFooter({ userId, onRefresh }: { userId: string; onRefresh?: 
     return (
         <div style={{
             display: "flex",
+            flexWrap: "wrap",
             gap: 8,
             justifyContent: "flex-end",
             alignItems: "center",
@@ -3403,23 +3347,20 @@ function ActivityLogFooter({ userId, onRefresh }: { userId: string; onRefresh?: 
                             const ok = await activityStore.importAll(text)
                             if (ok) {
                                 onRefresh?.()
-                                Toasts.show({
-                                    message: `Imported activity log`,
-                                    id: Toasts.genId(),
-                                    type: Toasts.Type.SUCCESS,
+                                showToast({
+                                    text: `Imported activity log`,
+                                    variant: "success",
                                 })
                             } else {
-                                Toasts.show({
-                                    message: "Failed to import — invalid JSON file",
-                                    id: Toasts.genId(),
-                                    type: Toasts.Type.FAILURE,
+                                showToast({
+                                    text: "Failed to import — invalid JSON file",
+                                    variant: "critical",
                                 })
                             }
                         } catch (err: any) {
-                            Toasts.show({
-                                message: `Import failed: ${err?.message || "could not read file"}`,
-                                id: Toasts.genId(),
-                                type: Toasts.Type.FAILURE,
+                            showToast({
+                                text: `Import failed: ${err?.message || "could not read file"}`,
+                                variant: "critical",
                             })
                         }
                     }
@@ -3476,10 +3417,9 @@ function ActivityLogFooter({ userId, onRefresh }: { userId: string; onRefresh?: 
                     const userLogs = activityStore.getLogs(userId)
                     const scoped = exportCat === "all" ? userLogs : userLogs.filter(l => matchesCategory(l, exportCat))
                     if (scoped.length === 0) {
-                        Toasts.show({
-                            message: exportCat === "all" ? "No activity to export" : `No ${exportCat} logs to export`,
-                            id: Toasts.genId(),
-                            type: Toasts.Type.FAILURE,
+                        showToast({
+                            text: exportCat === "all" ? "No activity to export" : `No ${exportCat} logs to export`,
+                            variant: "critical",
                         })
                         return
                     }
@@ -3492,10 +3432,9 @@ function ActivityLogFooter({ userId, onRefresh }: { userId: string; onRefresh?: 
                     a.download = `userradar_${userId}${suffix}_${new Date().toISOString().slice(0,10)}.json`
                     a.click()
                     URL.revokeObjectURL(url)
-                    Toasts.show({
-                        message: `Exported ${scoped.length} ${exportCat === "all" ? "events" : exportCat + " events"}`,
-                        id: Toasts.genId(),
-                        type: Toasts.Type.SUCCESS,
+                    showToast({
+                        text: `Exported ${scoped.length} ${exportCat === "all" ? "events" : exportCat + " events"}`,
+                        variant: "success",
                     })
                 }}
                 style={{
@@ -3523,10 +3462,9 @@ function ActivityLogFooter({ userId, onRefresh }: { userId: string; onRefresh?: 
                 className="ur-tab-btn ur-chip"
                 onClick={async () => {
                     if (count === 0) {
-                        Toasts.show({
-                            message: "No activity to clear",
-                            id: Toasts.genId(),
-                            type: Toasts.Type.FAILURE,
+                        showToast({
+                            text: "No activity to clear",
+                            variant: "critical",
                         })
                         return
                     }
@@ -3643,20 +3581,18 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
     const setOv = (key: keyof WatchedUser["overrides"], val: boolean | null) => {
         patchUser(settings, user.id, { overrides: { ...user.overrides, [key]: val } })
         refresh()
-        const label = getWatchedUser(settings, user.id)?.nick
         const u = UserStore.getUser(user.id)
-        const name = displayName(u) || user.id
-        const dn = label ? `${label} (${name})` : name
+        const dn = labeledName(user.id, u)
         const featLabel = OV_GROUPS.messages.find(r => r.key === key)?.label
             || OV_GROUPS.presence.find(r => r.key === key)?.label
             || OV_GROUPS.profile.find(r => r.key === key)?.label
             || key
         if (val === true) {
-            Toasts.show({ type: Toasts.Type.SUCCESS, message: `${dn}: ${featLabel} enabled`, id: Toasts.genId() })
+            showToast({ variant: "success", text: `${dn}: ${featLabel} enabled` })
         } else if (val === false) {
-            Toasts.show({ type: Toasts.Type.MESSAGE, message: `${dn}: ${featLabel} disabled`, id: Toasts.genId() })
+            showToast({ text: `${dn}: ${featLabel} disabled` })
         } else if (val === null) {
-            Toasts.show({ type: Toasts.Type.SUCCESS, message: `${dn}: ${featLabel} reset to global`, id: Toasts.genId() })
+            showToast({ variant: "success", text: `${dn}: ${featLabel} reset to global` })
         }
     }
 
@@ -3679,10 +3615,7 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
         list[idx] = { ...list[idx], overrides: newOverrides }
         settings.store.watchlist = JSON.stringify(list)
         refresh()
-        const label = getWatchedUser(settings, user.id)?.nick
-        const u = UserStore.getUser(user.id)
-        const name = displayName(u) || user.id
-        Toasts.show({ type: Toasts.Type.SUCCESS, message: `${label ? `${label} (${name})` : name}: all overrides reset`, id: Toasts.genId() })
+        showToast({ variant: "success", text: `${labeledName(user.id, UserStore.getUser(user.id))}: all overrides reset` })
     }
 
     const enableAll = () => {
@@ -3696,10 +3629,7 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
         list[idx] = { ...list[idx], overrides: newOverrides }
         settings.store.watchlist = JSON.stringify(list)
         refresh()
-        const label = getWatchedUser(settings, user.id)?.nick
-        const u = UserStore.getUser(user.id)
-        const name = displayName(u) || user.id
-        Toasts.show({ type: Toasts.Type.SUCCESS, message: `${label ? `${label} (${name})` : name}: all ${OV_TAB_LABELS[ovTab]} enabled`, id: Toasts.genId() })
+        showToast({ variant: "success", text: `${labeledName(user.id, UserStore.getUser(user.id))}: all ${OV_TAB_LABELS[ovTab]} enabled` })
     }
 
     const disableAll = () => {
@@ -3713,82 +3643,36 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
         list[idx] = { ...list[idx], overrides: newOverrides }
         settings.store.watchlist = JSON.stringify(list)
         refresh()
-        const label = getWatchedUser(settings, user.id)?.nick
-        const u = UserStore.getUser(user.id)
-        const name = displayName(u) || user.id
-        Toasts.show({ type: Toasts.Type.MESSAGE, message: `${label ? `${label} (${name})` : name}: all ${OV_TAB_LABELS[ovTab]} disabled`, id: Toasts.genId() })
+        showToast({ text: `${labeledName(user.id, UserStore.getUser(user.id))}: all ${OV_TAB_LABELS[ovTab]} disabled` })
     }
 
     const applyPreset = (preset: "stalker" | "lite" | "silent") => {
-        const label = getWatchedUser(settings, user.id)?.nick
         const u = UserStore.getUser(user.id)
-        const name = displayName(u) || user.id
-        const dn = label ? `${label} (${name})` : name
-        Toasts.show({ type: Toasts.Type.SUCCESS, message: `${dn}: ${preset} preset applied`, id: Toasts.genId() })
+        const dn = labeledName(user.id, u)
+        showToast({ variant: "success", text: `${dn}: ${preset} preset applied` })
         const list = getWatchlist(settings)
         const idx = list.findIndex(u => u.id === user.id)
         if (idx === -1) return
-        const newOverrides: any = {}
-        Object.keys(OV_GROUPS).forEach(g => {
-            OV_GROUPS[g as OvTab].forEach(r => {
-                newOverrides[r.key] = null
-            })
-        })
-        if (preset === "silent") {
-            Object.keys(OV_GROUPS).forEach(g => {
-                OV_GROUPS[g as OvTab].forEach(r => {
-                    newOverrides[r.key] = false
-                })
-            })
-            list[idx] = { ...list[idx], overrides: newOverrides }
-            settings.store.watchlist = JSON.stringify(list)
-            refresh()
-            return
+        const overrides: any = {}
+        for (const { key } of Object.values(OV_GROUPS).flat()) {
+            overrides[key] = preset === "stalker" ? true
+                : preset === "lite" ? LITE_FEATURES.includes(key)
+                : null
         }
-        if (preset === "lite") {
-            newOverrides["msgs"] = true
-            newOverrides["deletes"] = true
-            newOverrides["typing"] = true
-            newOverrides["avatar"] = true
-            newOverrides["voice"] = true
-            newOverrides["status"] = true
-            Object.keys(OV_GROUPS).forEach(g => {
-                OV_GROUPS[g as OvTab].forEach(r => {
-                    if (!["msgs","deletes","typing","avatar","voice","status"].includes(r.key)) {
-                        newOverrides[r.key] = false
-                    }
-                })
-            })
-            list[idx] = { ...list[idx], overrides: newOverrides }
-            settings.store.watchlist = JSON.stringify(list)
-            refresh()
-            return
-        }
-        Object.keys(OV_GROUPS).forEach(g => {
-            OV_GROUPS[g as OvTab].forEach(r => {
-                newOverrides[r.key] = true
-            })
-        })
-        list[idx] = { ...list[idx], overrides: newOverrides }
+        // silent keeps logging on, it only mutes this user's notifications
+        list[idx] = { ...list[idx], overrides, muted: preset === "silent" }
         settings.store.watchlist = JSON.stringify(list)
         refresh()
     }
 
     const detectPreset = (): "stalker" | "lite" | "silent" | "custom" => {
-        const allKeys: string[] = []
-        Object.keys(OV_GROUPS).forEach(g => {
-            OV_GROUPS[g as OvTab].forEach(r => allKeys.push(r.key))
-        })
+        if (user.muted) return "silent"
+        const allKeys = Object.values(OV_GROUPS).flat().map(r => r.key)
         const ov = user.overrides as any
-        const allFalse = allKeys.every(k => ov[k] === false)
-        if (allFalse) return "silent"
-        const allTrue = allKeys.every(k => ov[k] === true)
-        if (allTrue) return "stalker"
-        const liteKeys = ["msgs","deletes","typing","avatar","voice","status"]
-        const isLite = liteKeys.every(k => ov[k] === true) &&
-            allKeys.filter(k => !liteKeys.includes(k)).every(k => ov[k] === false)
-        if (isLite) return "lite"
-        return "custom"
+        if (allKeys.every(k => ov[k] === true)) return "stalker"
+        const isLite = LITE_FEATURES.every(k => ov[k] === true) &&
+            allKeys.filter(k => !LITE_FEATURES.includes(k)).every(k => ov[k] === false)
+        return isLite ? "lite" : "custom"
     }
 
     const activePreset = detectPreset()
@@ -3877,10 +3761,10 @@ function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove, isPinn
                             </span>
                         )}
                     </div>
-                    <div style={{ fontSize: 11, color: C.muted, marginTop: 3, display: "flex", alignItems: "center", gap: 5 }}>
-                        <span style={{ fontFamily: "monospace", opacity: .7 }}>{user.id}</span>
+                    <div style={{ fontSize: 11, color: C.muted, marginTop: 3, display: "flex", alignItems: "center", flexWrap: "wrap", gap: "0 5px" }}>
+                        <span style={{ fontFamily: "monospace", opacity: .7, whiteSpace: "nowrap" }}>{user.id}</span>
                         <span>·</span>
-                        <span title={exactTime(user.addedAt)}>{timeAgo(user.addedAt)}</span>
+                        <span title={exactTime(user.addedAt)} style={{ whiteSpace: "nowrap" }}>{timeAgo(user.addedAt)}</span>
                     </div>
                 </div>
 
@@ -4397,7 +4281,7 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
     return (
         <Modal
             {...modalProps}
-            size="lg"
+            size="xl"
             title={
                 <div className="ur-fade-in" style={{ flex: 1, display: "flex", alignItems: "center", gap: 12 }}>
                     <div className="ur-pulse" style={{
@@ -4419,9 +4303,158 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
                     </div>
                 </div>
             }
+            preview={
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", width: "100%", gap: 8 }}>
+                    <div style={{ display: "flex", flexWrap: "wrap", gap: 8 }}>
+                        <button
+                            onClick={() => {
+                                const input = document.createElement("input")
+                                input.type = "file"
+                                input.accept = ".json"
+                                input.onchange = async (e: any) => {
+                                    const file = e.target.files[0]
+                                    if (!file) return
+                                    try {
+                                        const text = await file.text()
+                                        const data = JSON.parse(text)
+                                        if (!Array.isArray(data)) throw new Error("Invalid format")
+                                        let added = 0
+                                        let skipped = 0
+                                        for (const u of data) {
+                                            // must be a real snowflake
+                                            const id = typeof u?.id === "string" ? u.id.trim() : ""
+                                            if (!/^\d{17,20}$/.test(id)) { skipped++; continue }
+                                            if (isWatched(settings, id)) continue
+                                            const nick = typeof u?.nick === "string" ? u.nick.trim().slice(0, 50) : ""
+                                            addUser(settings, id, nick)
+                                            added++
+                                        }
+                                        refresh()
+                                        showToast({
+                                            text: skipped > 0
+                                                ? `Imported ${added} users, skipped ${skipped} invalid entries`
+                                                : `Imported ${added} users to watchlist`,
+                                            variant: "success",
+                                        })
+                                    } catch (err: any) {
+                                        showToast({
+                                            text: `Import failed: ${err.message || "Invalid file"}`,
+                                            variant: "critical",
+                                        })
+                                    }
+                                }
+                                input.click()
+                            }}
+                            style={{
+                                padding: "8px 16px",
+                                borderRadius: 20,
+                                background: "rgba(255,255,255,0.045)",
+                                border: `1px solid ${C.border}`,
+                                color: C.text,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                            }}
+                            className="ur-footer-btn"
+                        >
+                            <ico.download />
+                            Import
+                        </button>
+                        <button
+                            onClick={() => {
+                                const list = getWatchlist(settings)
+                                if (list.length === 0) {
+                                    showToast({
+                                        text: "Watchlist is empty",
+                                        variant: "critical",
+                                    })
+                                    return
+                                }
+                                const data = JSON.stringify(list, null, 2)
+                                const blob = new Blob([data], { type: "application/json" })
+                                const url = URL.createObjectURL(blob)
+                                const a = document.createElement("a")
+                                a.href = url
+                                a.download = `userradar_watchlist_${new Date().toISOString().slice(0,10)}.json`
+                                a.click()
+                                URL.revokeObjectURL(url)
+                                showToast({
+                                    text: `Exported ${list.length} users`,
+                                    variant: "success",
+                                })
+                            }}
+                            style={{
+                                padding: "8px 16px",
+                                borderRadius: 20,
+                                background: "rgba(255,255,255,0.045)",
+                                border: `1px solid ${C.border}`,
+                                color: C.text,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                            }}
+                            className="ur-footer-btn"
+                        >
+                            <ico.upload />
+                            Export
+                        </button>
+                        <button
+                            onClick={() => {
+                                if (confirm("Clear all activity logs for ALL watched users? This cannot be undone.")) {
+                                    activityStore.clearAll().then(() => {
+                                        showToast({
+                                            text: "All activity logs cleared",
+                                            variant: "success",
+                                        })
+                                    })
+                                }
+                            }}
+                            style={{
+                                padding: "8px 16px",
+                                borderRadius: 20,
+                                background: "rgba(218,55,60,0.08)",
+                                border: `1px solid ${C.red}`,
+                                color: C.red,
+                                fontSize: 12,
+                                fontWeight: 700,
+                                cursor: "pointer",
+                                fontFamily: "inherit",
+                                display: "flex",
+                                alignItems: "center",
+                                gap: 6,
+                            }}
+                            className="ur-footer-btn ur-footer-btn-danger"
+                        >
+                            <ico.clear />
+                            Clear All Logs
+                        </button>
+                    </div>
+
+                    <button
+                        onClick={modalProps.onClose}
+                        className="ur-footer-btn ur-footer-btn-primary"
+                        style={{
+                            borderRadius: 20, height: 32, padding: "0 18px",
+                            background: "rgba(255,255,255,0.045)", color: C.text,
+                            border: `1px solid ${C.border}`, fontSize: 13,
+                            fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
+                        }}
+                    >
+                        close
+                    </button>
+                </div>
+            }
         >
             <div className="ur-modal-in">
-                <div className="ur-scrollbar" style={{ padding: "0 16px", maxHeight: "60vh", overflowY: "auto" }}>
+                <div style={{ padding: "0 16px" }}>
                     <AddUserSection onAdded={refresh} />
 
                     <div style={{ height: 1, background: C.border, margin: "18px 0" }} />
@@ -4496,159 +4529,6 @@ function WatchlistModal({ modalProps }: { modalProps: any }) {
                         />
                     ))}
                 </div>
-
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%", gap: 8 }}>
-                    <div style={{ display: "flex", gap: 8 }}>
-                        <button
-                            onClick={() => {
-                                const input = document.createElement("input")
-                                input.type = "file"
-                                input.accept = ".json"
-                                input.onchange = async (e: any) => {
-                                    const file = e.target.files[0]
-                                    if (!file) return
-                                    try {
-                                        const text = await file.text()
-                                        const data = JSON.parse(text)
-                                        if (!Array.isArray(data)) throw new Error("Invalid format")
-                                        let added = 0
-                                        let skipped = 0
-                                        for (const u of data) {
-                                            // must be a real snowflake
-                                            const id = typeof u?.id === "string" ? u.id.trim() : ""
-                                            if (!/^\d{17,20}$/.test(id)) { skipped++; continue }
-                                            if (isWatched(settings, id)) continue
-                                            const nick = typeof u?.nick === "string" ? u.nick.trim().slice(0, 50) : ""
-                                            addUser(settings, id, nick)
-                                            added++
-                                        }
-                                        refresh()
-                                        Toasts.show({
-                                            message: skipped > 0
-                                                ? `Imported ${added} users, skipped ${skipped} invalid entries`
-                                                : `Imported ${added} users to watchlist`,
-                                            id: Toasts.genId(),
-                                            type: Toasts.Type.SUCCESS,
-                                        })
-                                    } catch (err: any) {
-                                        Toasts.show({
-                                            message: `Import failed: ${err.message || "Invalid file"}`,
-                                            id: Toasts.genId(),
-                                            type: Toasts.Type.FAILURE,
-                                        })
-                                    }
-                                }
-                                input.click()
-                            }}
-                            style={{
-                                padding: "8px 16px",
-                                borderRadius: 20,
-                                background: "rgba(255,255,255,0.045)",
-                                border: `1px solid ${C.border}`,
-                                color: C.text,
-                                fontSize: 12,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                fontFamily: "inherit",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                            }}
-                            className="ur-footer-btn"
-                        >
-                            <ico.download />
-                            Import
-                        </button>
-                        <button
-                            onClick={() => {
-                                const list = getWatchlist(settings)
-                                if (list.length === 0) {
-                                    Toasts.show({
-                                        message: "Watchlist is empty",
-                                        id: Toasts.genId(),
-                                        type: Toasts.Type.FAILURE,
-                                    })
-                                    return
-                                }
-                                const data = JSON.stringify(list, null, 2)
-                                const blob = new Blob([data], { type: "application/json" })
-                                const url = URL.createObjectURL(blob)
-                                const a = document.createElement("a")
-                                a.href = url
-                                a.download = `userradar_watchlist_${new Date().toISOString().slice(0,10)}.json`
-                                a.click()
-                                URL.revokeObjectURL(url)
-                                Toasts.show({
-                                    message: `Exported ${list.length} users`,
-                                    id: Toasts.genId(),
-                                    type: Toasts.Type.SUCCESS,
-                                })
-                            }}
-                            style={{
-                                padding: "8px 16px",
-                                borderRadius: 20,
-                                background: "rgba(255,255,255,0.045)",
-                                border: `1px solid ${C.border}`,
-                                color: C.text,
-                                fontSize: 12,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                fontFamily: "inherit",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                            }}
-                            className="ur-footer-btn"
-                        >
-                            <ico.upload />
-                            Export
-                        </button>
-                        <button
-                            onClick={() => {
-                                if (confirm("Clear all activity logs for ALL watched users? This cannot be undone.")) {
-                                    activityStore.clearAll().then(() => {
-                                        Toasts.show({
-                                            message: "All activity logs cleared",
-                                            id: Toasts.genId(),
-                                            type: Toasts.Type.SUCCESS,
-                                        })
-                                    })
-                                }
-                            }}
-                            style={{
-                                padding: "8px 16px",
-                                borderRadius: 20,
-                                background: "rgba(218,55,60,0.08)",
-                                border: `1px solid ${C.red}`,
-                                color: C.red,
-                                fontSize: 12,
-                                fontWeight: 700,
-                                cursor: "pointer",
-                                fontFamily: "inherit",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: 6,
-                            }}
-                            className="ur-footer-btn ur-footer-btn-danger"
-                        >
-                            <ico.clear />
-                            Clear All Logs
-                        </button>
-                    </div>
-
-                    <button
-                        onClick={modalProps.onClose}
-                        className="ur-footer-btn ur-footer-btn-primary"
-                        style={{
-                            borderRadius: 20, height: 32, padding: "0 18px",
-                            background: "rgba(255,255,255,0.045)", color: C.text,
-                            border: `1px solid ${C.border}`, fontSize: 13,
-                            fontWeight: 500, cursor: "pointer", fontFamily: "inherit",
-                        }}
-                    >
-                        close
-                    </button>
-                </div>
             </div>
         </Modal>
     )
@@ -4667,8 +4547,8 @@ const userCtxPatch: NavContextMenuPatchCallback = (children, { user }) => {
                 label={isW ? "Unwatch User" : "Watch User"}
                 icon={isW ? CtxEyeOffIcon : CtxEyeIcon}
                 action={() => {
-                    if (isW) { removeUser(settings, user.id); purgeUserCaches(user.id); Toasts.show({ type: Toasts.Type.MESSAGE, message: `removed ${displayName(user)} from watchlist`, id: Toasts.genId() }) }
-                    else { addUser(settings, user.id); fetchNewUserBaseline(user.id); Toasts.show({ type: Toasts.Type.SUCCESS, message: `added ${displayName(user)} to watchlist`, id: Toasts.genId() }) }
+                    if (isW) { removeUser(settings, user.id); purgeUserCaches(user.id); showToast({ text: `removed ${displayName(user)} from watchlist` }) }
+                    else { addUser(settings, user.id); fetchNewUserBaseline(user.id); showToast({ variant: "success", text: `added ${displayName(user)} to watchlist` }) }
                 }}
 
             />
@@ -4694,8 +4574,8 @@ const msgCtxPatch: NavContextMenuPatchCallback = (children, { message }) => {
                 label={isW ? "remove author from watchlist" : "add author to watchlist"}
                 icon={isW ? CtxEyeOffIcon : CtxEyeIcon}
                 action={() => {
-                    if (isW) { removeUser(settings, message.author.id); purgeUserCaches(message.author.id); Toasts.show({ type: Toasts.Type.MESSAGE, message: `removed ${displayName(message.author)} from watchlist`, id: Toasts.genId() }) }
-                    else { addUser(settings, message.author.id); fetchNewUserBaseline(message.author.id); Toasts.show({ type: Toasts.Type.SUCCESS, message: `added ${displayName(message.author)} to watchlist`, id: Toasts.genId() }) }
+                    if (isW) { removeUser(settings, message.author.id); purgeUserCaches(message.author.id); showToast({ text: `removed ${displayName(message.author)} from watchlist` }) }
+                    else { addUser(settings, message.author.id); fetchNewUserBaseline(message.author.id); showToast({ variant: "success", text: `added ${displayName(message.author)} to watchlist` }) }
                 }}
 
             />
@@ -5361,6 +5241,7 @@ export default definePlugin({
         removeContextMenuPatch("message", msgCtxPatch)
         stopToolbarObserver()
         stopDMObserver()
+        document.getElementById(STYLE_ID)?.remove()
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null }
         Object.keys(profileCache).forEach(k => delete profileCache[k])
         Object.keys(vcCache).forEach(k => delete vcCache[k])
@@ -5397,9 +5278,7 @@ export default definePlugin({
                 }
             }
             if (isFeatureOn(uid, "msgs", "globalMsgs")) {
-                const label = getWatchedUser(settings, uid)?.nick
-                const name  = displayName(message.author)
-                const dn    = label ? `${label} (${name})` : name
+                const dn = labeledName(uid, message.author)
                 const ch    = ChannelStore.getChannel(channelId)
                 const gName = guildName(ch?.guild_id)
                 const chName  = ch?.name || "dm"
@@ -5436,9 +5315,7 @@ export default definePlugin({
 
             if (!isFeatureOn(uid, "edits", "globalEdits")) return
 
-            const label = getWatchedUser(settings, uid)?.nick
-            const name  = displayName(message.author)
-            const dn    = label ? `${label} (${name})` : name
+            const dn = labeledName(uid, message.author)
             const ch    = ChannelStore.getChannel(message.channel_id)
             const gName = guildName(ch?.guild_id)
             const chName = ch?.name || "dm"
@@ -5489,9 +5366,7 @@ export default definePlugin({
             const uid = msg.author.id
             if (!isWatched(settings, uid)) return
             if (isFeatureOn(uid, "deletes", "globalDeletes")) {
-                const label = getWatchedUser(settings, uid)?.nick
-                const name  = displayName(msg.author)
-                const dn    = label ? `${label} (${name})` : name
+                const dn = labeledName(uid, msg.author)
                 const ch    = ChannelStore.getChannel(channelId)
                 const gName = guildName(ch?.guild_id)
                 const chName  = ch?.name || "dm"
@@ -5520,10 +5395,8 @@ export default definePlugin({
         TYPING_START({ channelId, userId }: TypingEvent) {
             if (!isWatched(settings, userId)) return
             if (isFeatureOn(userId, "typing", "globalTyping")) {
-                const label = getWatchedUser(settings, userId)?.nick
                 const u     = UserStore.getUser(userId)
-                const name  = displayName(u) || userId
-                const dn    = label ? `${label} (${name})` : name
+                const dn = labeledName(userId, u)
                 const ch    = ChannelStore.getChannel(channelId)
                 const gName = guildName(ch?.guild_id)
                 const chName  = ch?.name || "dm"
@@ -5581,10 +5454,8 @@ export default definePlugin({
                     continue
                 }
 
-                const label = getWatchedUser(settings, uid)?.nick
                 const u     = UserStore.getUser(uid)
-                const name  = displayName(u) || uid
-                const dn    = label ? `${label} (${name})` : name
+                const dn = labeledName(uid, u)
                 const ch    = now ? ChannelStore.getChannel(now) : (old ? ChannelStore.getChannel(old) : null)
                 const chName = ch?.name || "unknown"
 
@@ -5892,9 +5763,7 @@ export default definePlugin({
             guildCache[user.id].add(guildId)
 
             const gn    = guildName(guildId)
-            const label = getWatchedUser(settings, user.id)?.nick
-            const name  = displayName(user)
-            const dn    = label ? `${label} (${name})` : name
+            const dn = labeledName(user.id, user)
             notify({
                 _uid: user.id,
                 title: `${dn} Joined a Server`,
@@ -5915,9 +5784,7 @@ export default definePlugin({
             guildCache[user.id].delete(guildId)
 
             const gn    = guildName(guildId)
-            const label = getWatchedUser(settings, user.id)?.nick
-            const name  = displayName(user)
-            const dn    = label ? `${label} (${name})` : name
+            const dn = labeledName(user.id, user)
             notify({
                 _uid: user.id,
                 title: `${dn} Left a Server`,

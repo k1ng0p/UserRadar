@@ -112,6 +112,7 @@ export interface WatchedUser {
     id: string
     nick: string     // your personal label, e.g. "my ex", "the rat from work"
     addedAt: number  // timestamp so we can show when they were added
+    muted?: boolean  // no notifications for this user, logging still runs
     // per-user overrides — null means "just use the global setting"
     overrides: {
         msgs:     boolean | null

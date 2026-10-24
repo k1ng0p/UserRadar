@@ -1,37 +1,60 @@
 // store.ts — k1ng_op
 // watchlist crud + misc helpers
 
+import { DataStore } from "@api/index"
 import { Logger } from "@utils/Logger"
 import { WatchedUser } from "./types"
 
 export const log = new Logger("UserRadar", "#a78bfa")
 
+let corruptRaw: string | null = null
+
 function parseList(raw: string): WatchedUser[] {
     if (!raw || raw.trim() === "") return []
     try {
-        return JSON.parse(raw) as WatchedUser[]
+        const data = JSON.parse(raw)
+        if (!Array.isArray(data)) throw new Error("not an array")
+        return data.filter(u => u && typeof u.id === "string") as WatchedUser[]
     } catch {
-        log.error("watchlist json got corrupted, resetting")
+        log.error("watchlist json is unreadable, a backup is kept on the next save")
+        corruptRaw = raw
         return []
     }
 }
 
-// always read fresh from settings — never cache in a local var
-// learned this the hard way after "why isn't this user removed" bugs
+// mutating callers parse fresh from settings every time
 export function getWatchlist(s: any): WatchedUser[] {
     return parseList(s.store.watchlist ?? "[]")
 }
 
 export function saveWatchlist(s: any, list: WatchedUser[]) {
+    // never overwrite an unreadable watchlist without keeping a copy
+    if (corruptRaw) {
+        DataStore.set("UserRadar_Watchlist_Backup", corruptRaw).catch(() => { })
+        corruptRaw = null
+    }
     s.store.watchlist = JSON.stringify(list)
 }
 
+// read-only lookup, rebuilt only when the stored json changes.
+// events fire for every user on discord so this has to be cheap
+let indexRaw: string | null = null
+let indexById = new Map<string, WatchedUser>()
+function watchedIndex(s: any) {
+    const raw = s.store.watchlist ?? "[]"
+    if (raw !== indexRaw) {
+        indexById = new Map(parseList(raw).map(u => [u.id, u]))
+        indexRaw = raw
+    }
+    return indexById
+}
+
 export function isWatched(s: any, uid: string) {
-    return getWatchlist(s).some(u => u.id === uid)
+    return watchedIndex(s).has(uid)
 }
 
 export function getWatchedUser(s: any, uid: string) {
-    return getWatchlist(s).find(u => u.id === uid)
+    return watchedIndex(s).get(uid)
 }
 
 export function addUser(s: any, uid: string, nick = "") {
@@ -100,6 +123,7 @@ export function inQuietHours(s: any): boolean {
     }
     const start = parse(s.store.quietStart ?? "23:00")
     const end   = parse(s.store.quietEnd   ?? "07:00")
+    if (Number.isNaN(start) || Number.isNaN(end)) return false
     // handle overnight ranges like 23:00-07:00
     return start > end
         ? cur >= start || cur < end

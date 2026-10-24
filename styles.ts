@@ -1,3 +1,4 @@
+
 export const STYLES = `
         @keyframes ur-spin { to { transform:rotate(360deg) } }
         .ur-spin { display:inline-block;width:14px;height:14px;border-radius:50%;
@@ -130,3 +131,17 @@ export const STYLES = `
         .ur-footer-btn-danger:hover { background: rgba(218,55,60,0.2) !important; border-color: #da373c !important; box-shadow: 0 6px 16px rgba(218,55,60,0.3); }
         .ur-footer-btn-primary:hover { background: #5865f2 !important; border-color: #5865f2 !important; color: #fff !important; box-shadow: 0 6px 18px rgba(88,101,242,0.4); }
     `
+
+export const STYLE_ID = "ur-s9"
+
+export function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return
+    const s = document.createElement("style")
+    s.id = STYLE_ID
+    s.textContent = STYLES
+    document.head.appendChild(s)
+}
+
+export function removeStyles() {
+    document.getElementById(STYLE_ID)?.remove()
+}

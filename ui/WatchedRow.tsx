@@ -1,8 +1,6 @@
 import { openUserProfile } from "@utils/discord"
-import { findByProps } from "@webpack"
 import { React, showToast, UserStore } from "@webpack/common"
 
-import { statusCache } from "../caches"
 import { FALLBACK_AV, LITE_FEATURES } from "../constants"
 import { isFeatureOn, labeledName, notify } from "../notify"
 import { settings } from "../settings"
@@ -17,6 +15,7 @@ import { StatusBadgeIcon } from "./LogCard"
 import { OV_GROUPS, OV_TAB_ICONS, OV_TAB_LABELS, OvTab } from "./overrides"
 import { C } from "./theme"
 import { Toggle } from "./Toggle"
+import { useLiveStatus } from "./useLiveStatus"
 
 export function previewNotification(uid: string, type: string) {
     const u = UserStore.getUser(uid)
@@ -55,20 +54,7 @@ export function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove,
     const setExp = (v: boolean) => setExpandedId(v ? user.id : null)
     const [copied,   setCopy] = React.useState(false)
     const [ovTab,    setOvTab] = React.useState<OvTab>("messages")
-    const [liveStatus, setLiveStatus] = React.useState<string>(() => statusCache[user.id] || "offline")
-
-    React.useEffect(() => {
-        const presMod = findByProps("getStatus", "getActivities")
-        const tick = () => {
-            try {
-                const s = presMod?.getStatus?.(user.id)
-                if (s) setLiveStatus(s)
-            } catch { }
-        }
-        tick()
-        const iv = setInterval(tick, 4000)
-        return () => clearInterval(iv)
-    }, [user.id])
+    const liveStatus = useLiveStatus(user.id)
 
     const du   = UserStore.getUser(user.id)
     const name = displayName(du) || user.id

@@ -1,4 +1,5 @@
 import { React } from "@webpack/common"
+import type { JSX } from "react"
 
 import { _albumColorCache, appIconCache, extractAlbumColor, fetchAppIcon, MUSIC_APP_ICONS } from "../activityMedia"
 import { ActivityEntry, activityStore, ActivityType } from "../activityStore"
@@ -158,20 +159,21 @@ export function StatusBadgeIcon({ status }: { status: string }) {
     )
 }
 
-export function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
+type LogCardProps = {
     log: ActivityEntry
     expanded: boolean
-    onToggle: () => void
+    onToggle: (id: string) => void
     onDelete: (id: string) => void
     userId: string
-    index?: number
-}) {
+}
+
+function LogCardInner({ log, expanded, onToggle, onDelete, userId }: LogCardProps) {
     return (
             <div
                 key={log.id}
                 data-ur-card-body
                 className={`ur-log-card${expanded ? " open" : ""}`}
-                onClick={() => onToggle()}
+                onClick={() => onToggle(log.id)}
                 style={{
                     display: "flex",
                     gap: 14,
@@ -184,7 +186,6 @@ export function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
                     marginBottom: 6,
                     cursor: "pointer",
                     minHeight: 56,
-                    animationDelay: `${Math.min(index ?? 0, 12) * 22}ms`,
                 }}
             >
                 <ActivityCardIcon log={log} />
@@ -1107,4 +1108,13 @@ export function LogCard({ log, expanded, onToggle, onDelete, userId, index }: {
 
             </div>
     )
+}
+
+// memo so a new event or a filter change doesn't re-render every card.
+// React.memo can't run while the plugin file loads (webpack isn't ready yet),
+// so it is created on the first render instead
+let MemoCard: ((props: LogCardProps) => JSX.Element) | null = null
+export function LogCard(props: LogCardProps) {
+    MemoCard ??= React.memo(LogCardInner) as unknown as (props: LogCardProps) => JSX.Element
+    return <MemoCard {...props} />
 }

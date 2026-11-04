@@ -19,6 +19,9 @@ export function UserRadarActivityTab({ userId }: { userId: string }) {
     // only mount this many cards at first — rest load in on demand so opening
     // the log with hundreds of entries doesn't freeze on a big DOM dump
     const [visibleCount, setVisibleCount] = React.useState(60)
+    // stable identities, otherwise LogCard's memo never skips anything
+    const toggleCard = React.useCallback((id: string) => setExpandedId(cur => cur === id ? null : id), [])
+    const deleteCard = React.useCallback((id: string) => setLogs(prev => prev.filter(l => l.id !== id)), [])
     React.useEffect(() => { setVisibleCount(60) }, [activeFilters, searchQuery, sortMode])
 
     const toggleCompact = () => {
@@ -427,15 +430,14 @@ export function UserRadarActivityTab({ userId }: { userId: string }) {
                             <span style={{ flex: 1, height: 1, background: C.border }} />
                             <span>{dayLogs.length} events</span>
                         </div>
-                        {dayLogs.map((log, i) => (
+                        {dayLogs.map(log => (
                             <LogCard
                                 key={log.id}
                                 log={log}
                                 expanded={expandedId === log.id}
-                                onToggle={() => setExpandedId(expandedId === log.id ? null : log.id)}
-                                onDelete={(id) => setLogs(prev => prev.filter(l => l.id !== id))}
+                                onToggle={toggleCard}
+                                onDelete={deleteCard}
                                 userId={userId}
-                                index={i}
                             />
                         ))}
                     </div>

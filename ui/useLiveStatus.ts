@@ -1,5 +1,4 @@
-import { findByProps } from "@webpack"
-import { React } from "@webpack/common"
+import { PresenceStore, React } from "@webpack/common"
 
 import { statusCache } from "../caches"
 
@@ -8,7 +7,7 @@ const subscribers = new Map<string, Set<(status: string) => void>>()
 let timer: ReturnType<typeof setInterval> | null = null
 
 function read(uid: string): string | undefined {
-    try { return findByProps("getStatus", "getActivities")?.getStatus?.(uid) } catch { }
+    try { return PresenceStore.getStatus(uid) } catch { }
 }
 
 function tick() {

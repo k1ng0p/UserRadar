@@ -1,4 +1,4 @@
-import { findByProps } from "@webpack"
+import { PresenceStore, VoiceStateStore } from "@webpack/common"
 
 import { unpin } from "./pins"
 import { activeSessions, scheduleSessionSave } from "./sessions"
@@ -40,14 +40,14 @@ export function customStatusText(act: any): string | null {
 // snapshot of what discord already knows, so the first live event is not mistaken for a change
 export function seedUserCaches(uid: string) {
     try {
-        const vs = findByProps("getVoiceStateForUser")?.getVoiceStateForUser?.(uid)
+        const vs = VoiceStateStore.getVoiceStateForUser(uid)
         vcCache[uid]     = vs?.channelId ?? null
         cameraCache[uid] = vs?.selfVideo ?? false
         streamCache[uid] = vs?.selfStream ?? false
     } catch { vcCache[uid] = null; cameraCache[uid] = false; streamCache[uid] = false }
 
     try {
-        const presMod = findByProps("getStatus", "getActivities")
+        const presMod = PresenceStore
         const cs = presMod?.getClientStatus?.(uid)
         clientCache[uid] = cs ? resolveClient(cs) : null
 

@@ -1,6 +1,5 @@
 import { openUserProfile } from "@utils/discord"
-import { findByProps } from "@webpack"
-import { ChannelStore, UserStore } from "@webpack/common"
+import { ChannelStore, UserStore, VoiceStateStore } from "@webpack/common"
 
 import { activityStore, logUserActivity } from "../activityStore"
 import { cameraCache, clientCache, streamCache, vcCache, vcJoinTime } from "../caches"
@@ -33,7 +32,7 @@ const platformOf = (uid: string) => {
 function otherMembers(channelId: string, uid: string): string[] {
     if (!settings.store.logVcMembers) return []
     try {
-        const raw = findByProps("getVoiceStatesForChannel")?.getVoiceStatesForChannel?.(channelId)
+        const raw = VoiceStateStore.getVoiceStatesForChannel(channelId)
         if (!raw) return []
         const states: any[] = raw instanceof Map ? [...raw.values()] : Object.values(raw)
         return states
@@ -202,6 +201,12 @@ async function moveVoice(uid: string, from: string, to: string, dn: string, icon
 
     await closeVoiceSession(uid, from, fromName, guildName(fromCh?.guild_id))
     vcJoinTime[uid] = Date.now()
+
+    // camera and screen share carry on in the new channel
+    for (const kind of ["camera", "stream"] as const) {
+        const s = activeSessions[sessionKey(uid, kind)]
+        if (s) s.channelId = to, s.guildId = toCh?.guild_id, s.metadata = { ...s.metadata, server: gName || "DM", channel: toName }
+    }
 
     const route = `#${fromName} → #${toName}`
     notify({

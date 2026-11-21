@@ -65,8 +65,8 @@ export function onMessageUpdate({ message }: MsgUpdateEvent) {
 
     // edited_timestamp = real edit, not embed/pin/reaction
     if (!message.edited_timestamp) return
-    // embeds and pins resend the old edit timestamp, only a fresh one is a real edit
-    if (Date.now() - Date.parse(message.edited_timestamp) > 60_000) return
+    // embed and pin updates carry no content, a real edit always does
+    if (message.content === undefined) return
 
     if (!isFeatureOn(uid, "edits", "globalEdits")) return
 

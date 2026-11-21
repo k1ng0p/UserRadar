@@ -1,4 +1,5 @@
 import { findByProps } from "@webpack"
+import { GuildStore } from "@webpack/common"
 
 export function trunc(s: string, max: number) {
     return max > 0 && s.length > max ? s.slice(0, max) + "…" : s
@@ -20,7 +21,7 @@ export function avatarUrl(id: string, hash?: string | null, size = 80): string {
 
 export function guildName(guildId?: string | null): string | null {
     if (!guildId) return null
-    return findByProps("getGuild")?.getGuild(guildId)?.name ?? null
+    return GuildStore.getGuild(guildId)?.name ?? null
 }
 
 export function resolveClient(cs?: Record<string, string> | null): string | null {

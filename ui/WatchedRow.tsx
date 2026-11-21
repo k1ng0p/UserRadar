@@ -4,7 +4,7 @@ import { React, showToast, UserStore } from "@webpack/common"
 import { FALLBACK_AV, LITE_FEATURES } from "../constants"
 import { isFeatureOn, labeledName, notify } from "../notify"
 import { settings } from "../settings"
-import { displayName, getWatchlist, patchUser } from "../store"
+import { displayName, getWatchlist, patchUser, saveWatchlist } from "../store"
 import { WatchedUser } from "../types"
 import { avatarUrl, exactTime, timeAgo } from "../utils"
 import { ActivityBadge } from "./ActivityLogFooter"
@@ -96,7 +96,7 @@ export function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove,
             })
         })
         list[idx] = { ...list[idx], overrides: newOverrides }
-        settings.store.watchlist = JSON.stringify(list)
+        saveWatchlist(settings, list)
         refresh()
         showToast({ variant: "success", text: `${labeledName(user.id, UserStore.getUser(user.id))}: all overrides reset` })
     }
@@ -110,7 +110,7 @@ export function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove,
             newOverrides[r.key] = true
         })
         list[idx] = { ...list[idx], overrides: newOverrides }
-        settings.store.watchlist = JSON.stringify(list)
+        saveWatchlist(settings, list)
         refresh()
         showToast({ variant: "success", text: `${labeledName(user.id, UserStore.getUser(user.id))}: all ${OV_TAB_LABELS[ovTab]} enabled` })
     }
@@ -124,7 +124,7 @@ export function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove,
             newOverrides[r.key] = false
         })
         list[idx] = { ...list[idx], overrides: newOverrides }
-        settings.store.watchlist = JSON.stringify(list)
+        saveWatchlist(settings, list)
         refresh()
         showToast({ text: `${labeledName(user.id, UserStore.getUser(user.id))}: all ${OV_TAB_LABELS[ovTab]} disabled` })
     }
@@ -138,13 +138,11 @@ export function WatchedRow({ user, refresh, expandedId, setExpandedId, onRemove,
         if (idx === -1) return
         const overrides: any = {}
         for (const { key } of Object.values(OV_GROUPS).flat()) {
-            overrides[key] = preset === "stalker" ? true
-                : preset === "lite" ? LITE_FEATURES.includes(key)
-                : null
+            overrides[key] = preset === "lite" ? LITE_FEATURES.includes(key) : true
         }
         // silent keeps logging on, it only mutes this user's notifications
         list[idx] = { ...list[idx], overrides, muted: preset === "silent" }
-        settings.store.watchlist = JSON.stringify(list)
+        saveWatchlist(settings, list)
         refresh()
     }
 

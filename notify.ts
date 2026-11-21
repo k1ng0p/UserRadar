@@ -15,7 +15,8 @@ export function msgPreview(content: string, filename?: string) {
 export function isFeatureOn(uid: string, userKey: keyof WatchedUser["overrides"], globalKey: string): boolean {
     if (!isWatched(settings, uid)) return false
     const mode = settings.store.globalPresetMode ?? "custom"
-    if (mode === "stalker") return true
+    // silent logs everything too, notify() is what mutes it
+    if (mode === "stalker" || mode === "silent") return true
     if (mode === "lite") return LITE_FEATURES.includes(userKey)
     // custom and silent: silent only mutes notify(), logging follows the normal settings
     return featureOn(settings, uid, userKey, globalKey)

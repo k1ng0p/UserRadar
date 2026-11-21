@@ -4,6 +4,8 @@ import { activityStore } from "../activityStore"
 import { purgeUserCaches } from "../caches"
 import { getPinned, togglePin } from "../pins"
 import { settings } from "../settings"
+import { sleep } from "../utils"
+import { fetchNewUserBaseline } from "../handlers/profile"
 import { addUser, displayName, getWatchlist, isWatched, removeUser } from "../store"
 import { injectStyles } from "../styles"
 import { WatchedUser } from "../types"
@@ -91,6 +93,7 @@ export function WatchlistModal({ modalProps }: { modalProps: any }) {
                                         const data = JSON.parse(text)
                                         if (!Array.isArray(data)) throw new Error("Invalid format")
                                         let added = 0
+                                        const newIds: string[] = []
                                         let skipped = 0
                                         for (const u of data) {
                                             // must be a real snowflake
@@ -99,9 +102,12 @@ export function WatchlistModal({ modalProps }: { modalProps: any }) {
                                             if (isWatched(settings, id)) continue
                                             const nick = typeof u?.nick === "string" ? u.nick.trim().slice(0, 50) : ""
                                             addUser(settings, id, nick)
+                                            newIds.push(id)
                                             added++
                                         }
                                         refresh()
+                                        // spaced out so a big import doesn't hit the ratelimit
+                                        ;(async () => { for (const id of newIds) { await fetchNewUserBaseline(id); await sleep(800) } })()
                                         showToast({
                                             text: skipped > 0
                                                 ? `Imported ${added} users, skipped ${skipped} invalid entries`
@@ -293,7 +299,7 @@ export function WatchlistModal({ modalProps }: { modalProps: any }) {
                                 removeUser(settings, u.id)
                                 purgeUserCaches(u.id)
                                 if (settings.store.autoCleanupLogs) activityStore.clearLogs(u.id)
-                                if (getPinned().includes(u.id)) onTogglePin(u.id)
+                                setPinned(getPinned())
                                 refresh()
                             }}
                             isPinned={pinned.includes(u.id)}

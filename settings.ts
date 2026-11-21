@@ -28,6 +28,6 @@ export const settings = definePluginSettings({
     compactLogView:     { type: OptionType.BOOLEAN, default: false,                  description: "compact activity log cards" },
     autoCleanupLogs:    { type: OptionType.BOOLEAN, default: true,                   description: "delete logs when removing a user from watchlist" },
     debugLog:           { type: OptionType.BOOLEAN, default: false,                  description: "debug logging" },
-    showToolbarIcon:    { type: OptionType.BOOLEAN, default: true,                   description: "toolbar icon" },
+    showToolbarIcon:    { type: OptionType.BOOLEAN, default: true,                   restartNeeded: true, description: "toolbar icon" },
     logVcMembers:       { type: OptionType.BOOLEAN, default: false,                  description: "also log names of other people in the voice channel (privacy: logs non-watched users too)" },
 })

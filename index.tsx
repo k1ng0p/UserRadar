@@ -19,7 +19,7 @@ import { restoreSessions } from "./sessionRestore"
 import { saveActiveSessions, startSessionSaver, stopSessionSaver } from "./sessions"
 import { settings } from "./settings"
 import { getWatchlist, log } from "./store"
-import { removeStyles } from "./styles"
+import { injectStyles, removeStyles } from "./styles"
 
 let pollTimer: ReturnType<typeof setInterval> | null = null
 
@@ -34,6 +34,7 @@ export default definePlugin({
         addContextMenuPatch("message", msgCtxPatch)
         if (settings.store.showToolbarIcon) startToolbarObserver()
         startDMObserver()
+        injectStyles()
 
         activityStore.load().catch(e => log.error("failed to load activity log", e))
 
